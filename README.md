@@ -1,14 +1,10 @@
-# Control LLM open source models
+## Control LLM model performance
 ![control_llm_sota_comparison](https://github.com/user-attachments/assets/0f812d8a-ca2f-458b-a5bb-727cdf916ba2)
-# Control LLM architecture
-![control_llm_architecture](https://github.com/user-attachments/assets/418a4c2b-d94e-4add-8b08-6213a0e6e15e)
-# Control LLM benchmarks
-![catastrophic_forgetting_openmath](https://github.com/user-attachments/assets/caca0429-71a8-4a37-8f36-9c99d2262780)
-![catastrophic_forgetting_opencoder](https://github.com/user-attachments/assets/e2f6fa75-3519-45b3-97e2-577fad762544)
-# Control LLM insights
-![alignment_comparison](https://github.com/user-attachments/assets/f00bf1c5-687e-4265-af1e-6ea43886f4a6)
 
-# Control LLM code base
+## Control LLM architecture
+![control_llm_architecture](https://github.com/user-attachments/assets/418a4c2b-d94e-4add-8b08-6213a0e6e15e)
+
+## Control LLM code base
 
 This repo is to fine tune llm by Contro LLM with pre-training and sft. It supports following:
 
@@ -109,7 +105,7 @@ pkill -9 -f '/bin/python'
 pkill -9 -f 'ray::run_inference_one_model'
 ```
 
-## Train the model
+### Train the model
 
 - Detailed Steps:
 
@@ -276,7 +272,7 @@ go to ./src/controlllm/configs/training.py, set either flop_counter to True or u
     profiler_dir: str = "/home/jobuser/profiler_results"  # will be used if using profiler
 ```
 
-## Evaluate the model
+### Evaluate the model
 - lm-evaluation-harness is used to evaluate the model on openllm leaderboard tasks
 
 ```bash
@@ -322,7 +318,7 @@ The remote code for computing metrics is in ./src/controlllm/metrics, copy it ov
 
 <img width="430" alt="image" src="https://github.com/user-attachments/assets/ac8c36bc-938c-49ef-b011-977caee0b79c">
 
-## Test the model
+### Test the model
 - go to ./src/controlllm/inference/chat_completion.py, set vllm_model_path to the model checkpoint directory, for smaller model such as 8b, single GPU is enough, go to ./.vscode/launch.json, set nproc_per_node==1.
 
 ```bash
@@ -341,7 +337,7 @@ The remote code for computing metrics is in ./src/controlllm/metrics, copy it ov
     parser.add_argument("--hf_model_path_or_name", type=str, default="/shared/models/Meta-Llama-3-8B", help="Path/ name of the HF model that include config.json and tokenizer_config.json (e.g. meta-llama/Llama-2-7b-chat-hf)")
 ```
 
-## Reference:
+### Reference:
 - https://github.com/mosaicml/llm-foundry
 - https://github.com/togethercomputer/OpenChatKit
 - https://github.com/young-geng/EasyLM
