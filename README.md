@@ -1,8 +1,14 @@
+# Control LLM open source models
 ![control_llm_sota_comparison](https://github.com/user-attachments/assets/0f812d8a-ca2f-458b-a5bb-727cdf916ba2)
+# Control LLM architecture
 ![control_llm_architecture](https://github.com/user-attachments/assets/418a4c2b-d94e-4add-8b08-6213a0e6e15e)
+# Control LLM benchmarks
 ![catastrophic_forgetting_openmath](https://github.com/user-attachments/assets/caca0429-71a8-4a37-8f36-9c99d2262780)
 ![catastrophic_forgetting_opencoder](https://github.com/user-attachments/assets/e2f6fa75-3519-45b3-97e2-577fad762544)
+# Control LLM insights
 ![alignment_comparison](https://github.com/user-attachments/assets/f00bf1c5-687e-4265-af1e-6ea43886f4a6)
+
+# Control LLM code base
 
 This repo is to fine tune llm by Contro LLM with pre-training and sft. It supports following:
 
