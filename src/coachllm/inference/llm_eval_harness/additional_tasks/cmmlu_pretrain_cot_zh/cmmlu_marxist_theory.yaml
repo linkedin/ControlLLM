@@ -1,0 +1,3 @@
+"dataset_name": "marxist_theory"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_zh_marxist_theory"

@@ -1,0 +1,3 @@
+include: _template_yaml
+dataset_name: number_theory
+task: math_hard_pretrain_num_theory_hard

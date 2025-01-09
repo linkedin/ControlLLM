@@ -1,0 +1,3 @@
+"dataset_name": "high_school_chemistry"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_en_high_school_chemistry"

@@ -1,0 +1,3 @@
+"dataset_name": "jurisprudence"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_en_jurisprudence"

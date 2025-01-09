@@ -1,0 +1,15 @@
+group: math_hard_4shot_pretrain
+task:
+  - math_hard_pretrain_algebra_hard
+  - math_hard_pretrain_counting_and_prob_hard
+  - math_hard_pretrain_geometry_hard
+  - math_hard_pretrain_intermediate_algebra_hard
+  - math_hard_pretrain_num_theory_hard
+  - math_hard_pretrain_prealgebra_hard
+  - math_hard_pretrain_precalculus_hard
+aggregate_metric_list:
+  - aggregation: mean
+    metric: exact_match
+    weight_by_size: true
+metadata:
+  version: 1.0

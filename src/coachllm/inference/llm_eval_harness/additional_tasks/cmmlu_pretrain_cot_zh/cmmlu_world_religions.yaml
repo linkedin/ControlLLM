@@ -1,0 +1,3 @@
+"dataset_name": "world_religions"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_zh_world_religions"

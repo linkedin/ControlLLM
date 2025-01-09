@@ -1,0 +1,13 @@
+group: code_pretrain
+task:
+  - mbpp_sanitized_0shot_pretrain
+  - mbpp_plus_0shot_pretrain
+  - humaneval_greedy_pretrain
+  - humaneval_plus_greedy_pretrain
+aggregate_metric_list:
+  - aggregation: mean
+    metric: pass_at_1
+    weight_by_size: true
+    filter_list: n=1
+metadata:
+  version: 1.0

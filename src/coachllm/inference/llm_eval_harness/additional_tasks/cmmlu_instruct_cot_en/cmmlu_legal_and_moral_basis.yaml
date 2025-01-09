@@ -1,0 +1,3 @@
+"dataset_name": "legal_and_moral_basis"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_en_legal_and_moral_basis"

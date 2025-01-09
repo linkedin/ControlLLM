@@ -1,0 +1,3 @@
+"dataset_name": "high_school_mathematics"
+"include": "_default_ceval_yaml"
+"task": "ceval-valid-pretrain_high_school_mathematics"

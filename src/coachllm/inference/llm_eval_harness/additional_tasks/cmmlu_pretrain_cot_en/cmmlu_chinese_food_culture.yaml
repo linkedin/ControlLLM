@@ -1,0 +1,3 @@
+"dataset_name": "chinese_food_culture"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_en_chinese_food_culture"

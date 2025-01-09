@@ -1,0 +1,9 @@
+group: leaderboard
+task:
+  - arc_challenge
+  - hellaswag
+  - truthfulqa_mc2
+  - winogrande
+  - gsm8k
+  - mmlu
+  - mmlu_pro_5shot

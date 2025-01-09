@@ -1,0 +1,3 @@
+"dataset_name": "elementary_commonsense"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_elementary_commonsense"

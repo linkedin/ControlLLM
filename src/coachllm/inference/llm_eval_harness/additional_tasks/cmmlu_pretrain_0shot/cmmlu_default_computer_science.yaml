@@ -1,0 +1,3 @@
+"dataset_name": "computer_science"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_computer_science"

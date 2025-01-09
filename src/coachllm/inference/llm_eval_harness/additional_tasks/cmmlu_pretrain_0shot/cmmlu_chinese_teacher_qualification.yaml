@@ -1,0 +1,3 @@
+"dataset_name": "chinese_teacher_qualification"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_chinese_teacher_qualification"

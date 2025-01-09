@@ -1,0 +1,12 @@
+group: meta_pretrain
+task:
+  - meta_bbh_3shot_cot_pretrain
+  - meta_mmlu_5shot_pretrain
+  - meta_mmlu_pro_5shot_pretrain
+aggregate_metric_list:
+  - aggregation: mean
+    metric: exact_match
+    weight_by_size: true
+    filter_list: strict-match
+metadata:
+  version: 2.0

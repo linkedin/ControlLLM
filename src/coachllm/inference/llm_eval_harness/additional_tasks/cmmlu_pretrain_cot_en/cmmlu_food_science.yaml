@@ -1,0 +1,3 @@
+"dataset_name": "food_science"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_en_food_science"

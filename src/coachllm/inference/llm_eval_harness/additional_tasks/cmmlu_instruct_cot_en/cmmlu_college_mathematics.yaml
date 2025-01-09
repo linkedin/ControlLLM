@@ -1,0 +1,3 @@
+"dataset_name": "college_mathematics"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_en_college_mathematics"

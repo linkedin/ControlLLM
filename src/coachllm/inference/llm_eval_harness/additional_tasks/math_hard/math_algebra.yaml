@@ -1,0 +1,3 @@
+include: _template_yaml
+dataset_name: algebra
+task: math_hard_pretrain_algebra_hard

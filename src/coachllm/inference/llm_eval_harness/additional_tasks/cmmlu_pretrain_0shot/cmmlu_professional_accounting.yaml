@@ -1,0 +1,3 @@
+"dataset_name": "professional_accounting"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_professional_accounting"

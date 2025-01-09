@@ -1,0 +1,3 @@
+"dataset_name": "high_school_politics"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_high_school_politics"

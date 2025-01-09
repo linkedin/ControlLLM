@@ -1,0 +1,3 @@
+"dataset_name": "philosophy"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_zh_philosophy"

@@ -1,0 +1,11 @@
+group: math_pretrain_multishot
+task:
+  - math_hard_4shot_pretrain
+  - meta_math_4shot_pretrain
+  - gsm8k_8shot_pretrain
+aggregate_metric_list:
+  - aggregation: mean
+    metric: exact_match
+    weight_by_size: true
+metadata:
+  version: 1.0

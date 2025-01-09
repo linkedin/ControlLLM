@@ -1,0 +1,28 @@
+task: meta_mmlu_pro_5shot_pretrain
+dataset_path: meta-llama/llama-3.1-8_b-evals
+dataset_name: Llama-3.1-8B-evals__mmlu_pro__details
+test_split: latest
+output_type: generate_until
+process_docs: !function utils.meta_process_docs
+doc_to_text: !function utils.meta_doc_to_text
+doc_to_target: gold
+filter_list:
+  - name: "strict-match"
+    filter:
+      - function: "regex"
+        regex_pattern: 'answer is \(([A-Z])\)'
+      - function: "take_first"
+generation_kwargs:
+  until: "\n\nQ: "
+  do_sample: false
+  temperature: 0
+  max_gen_toks: 512
+num_fewshot: 0
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+metadata:
+  version: 1.0

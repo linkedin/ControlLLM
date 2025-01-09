@@ -1,0 +1,3 @@
+"dataset_name": "chinese_foreign_policy"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_en_chinese_foreign_policy"

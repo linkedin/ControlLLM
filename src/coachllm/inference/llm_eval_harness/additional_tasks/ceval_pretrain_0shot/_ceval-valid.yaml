@@ -1,0 +1,61 @@
+group: ceval-valid-pretrain-0shot
+task:
+  - ceval-valid-pretrain_computer_network
+  - ceval-valid-pretrain_operating_system
+  - ceval-valid-pretrain_computer_architecture
+  - ceval-valid-pretrain_college_programming
+  - ceval-valid-pretrain_college_physics
+  - ceval-valid-pretrain_college_chemistry
+  - ceval-valid-pretrain_advanced_mathematics
+  - ceval-valid-pretrain_probability_and_statistics
+  - ceval-valid-pretrain_discrete_mathematics
+  - ceval-valid-pretrain_electrical_engineer
+  - ceval-valid-pretrain_metrology_engineer
+  - ceval-valid-pretrain_high_school_mathematics
+  - ceval-valid-pretrain_high_school_physics
+  - ceval-valid-pretrain_high_school_chemistry
+  - ceval-valid-pretrain_high_school_biology
+  - ceval-valid-pretrain_middle_school_mathematics
+  - ceval-valid-pretrain_middle_school_biology
+  - ceval-valid-pretrain_middle_school_physics
+  - ceval-valid-pretrain_middle_school_chemistry
+  - ceval-valid-pretrain_veterinary_medicine
+  - ceval-valid-pretrain_college_economics
+  - ceval-valid-pretrain_business_administration
+  - ceval-valid-pretrain_marxism
+  - ceval-valid-pretrain_mao_zedong_thought
+  - ceval-valid-pretrain_education_science
+  - ceval-valid-pretrain_teacher_qualification
+  - ceval-valid-pretrain_high_school_politics
+  - ceval-valid-pretrain_high_school_geography
+  - ceval-valid-pretrain_middle_school_politics
+  - ceval-valid-pretrain_middle_school_geography
+  - ceval-valid-pretrain_modern_chinese_history
+  - ceval-valid-pretrain_ideological_and_moral_cultivation
+  - ceval-valid-pretrain_logic
+  - ceval-valid-pretrain_law
+  - ceval-valid-pretrain_chinese_language_and_literature
+  - ceval-valid-pretrain_art_studies
+  - ceval-valid-pretrain_professional_tour_guide
+  - ceval-valid-pretrain_legal_professional
+  - ceval-valid-pretrain_high_school_chinese
+  - ceval-valid-pretrain_high_school_history
+  - ceval-valid-pretrain_middle_school_history
+  - ceval-valid-pretrain_civil_servant
+  - ceval-valid-pretrain_sports_science
+  - ceval-valid-pretrain_plant_protection
+  - ceval-valid-pretrain_basic_medicine
+  - ceval-valid-pretrain_clinical_medicine
+  - ceval-valid-pretrain_urban_and_rural_planner
+  - ceval-valid-pretrain_accountant
+  - ceval-valid-pretrain_fire_engineer
+  - ceval-valid-pretrain_environmental_impact_assessment_engineer
+  - ceval-valid-pretrain_tax_accountant
+  - ceval-valid-pretrain_physician
+aggregate_metric_list:
+  - aggregation: mean
+    metric: exact_match
+    weight_by_size: true
+    filter_list: strict-match
+metadata:
+  version: 2.0

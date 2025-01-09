@@ -1,0 +1,3 @@
+"dataset_name": "security_study"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_security_study"

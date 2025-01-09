@@ -1,0 +1,3 @@
+"dataset_name": "urban_and_rural_planner"
+"include": "_default_ceval_yaml"
+"task": "ceval-valid-instruct-zh_urban_and_rural_planner"

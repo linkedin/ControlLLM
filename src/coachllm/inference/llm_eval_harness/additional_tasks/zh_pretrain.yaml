@@ -1,0 +1,13 @@
+group: zh_pretrain
+task:
+  - ceval-valid-pretrain-0shot
+  - ceval-valid-pretrain-cot_zh
+  - cmmlu_pretrain_0shot
+  - cmmlu_pretrain_cot_zh
+aggregate_metric_list:
+  - aggregation: mean
+    metric: exact_match
+    weight_by_size: true
+    filter_list: strict-match
+metadata:
+  version: 2.0

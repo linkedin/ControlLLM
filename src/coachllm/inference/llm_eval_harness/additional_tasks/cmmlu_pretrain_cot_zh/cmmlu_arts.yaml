@@ -1,0 +1,3 @@
+"dataset_name": "arts"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_zh_arts"

@@ -1,0 +1,13 @@
+group: zh_instruct
+task:
+  - ceval-valid-instruct-0shot
+  - ceval-valid-instruct-cot_zh
+  - cmmlu_instruct_0shot
+  - cmmlu_instruct_cot_zh
+aggregate_metric_list:
+  - aggregation: mean
+    metric: exact_match
+    weight_by_size: true
+    filter_list: strict-match
+metadata:
+  version: 2.0

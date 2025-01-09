@@ -1,0 +1,3 @@
+include: _template_yaml
+dataset_name: precalculus
+task: math_hard_pretrain_precalculus_hard

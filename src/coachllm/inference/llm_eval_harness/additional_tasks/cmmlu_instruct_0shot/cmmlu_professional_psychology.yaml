@@ -1,0 +1,3 @@
+"dataset_name": "professional_psychology"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_professional_psychology"

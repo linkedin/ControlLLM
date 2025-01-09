@@ -1,0 +1,3 @@
+"dataset_name": "modern_chinese_history"
+"include": "_default_ceval_yaml"
+"task": "ceval-valid-instruct-en_modern_chinese_history"

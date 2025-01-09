@@ -1,0 +1,43 @@
+task: gsm8k_0shot_pretrain
+test_split: test
+dataset_name: main
+dataset_path: gsm8k
+doc_to_target: '{{answer.split(''####'')[-1].strip() if answer is defined else target}}'
+doc_to_text: "Given the following problem, reason and give a final answer to the problem.\nProblem: {{question}}\nYour response should end with \"The final answer is [answer]\" where [answer] is the response to the problem.\n"
+filter_list:
+- filter:
+  - function: regex
+    group_select: -1
+    regex_pattern: The final answer is ((-?[$0-9.,]{2,})|(-?[0-9]+))
+  - function: take_first
+  name: strict-match
+- filter:
+  - function: regex
+    group_select: -1
+    regex_pattern: (-?[$0-9.,]{2,})|(-?[0-9]+)
+  - function: take_first
+  name: flexible-extract
+generation_kwargs:
+  do_sample: false
+  until:
+  - '<|eot_id|>'
+  - '<|start_header_id|>user<|end_header_id|>'
+  - 'Q:'
+  - </s>
+  - <|im_end|>
+tag:
+- chain_of_thought
+metadata:
+  version: 3.0
+metric_list:
+- aggregation: mean
+  higher_is_better: true
+  ignore_case: true
+  ignore_punctuation: false
+  metric: exact_match
+  regexes_to_ignore:
+  - ','
+  - \$
+  - '(?s).*#### '
+  - \.$
+output_type: generate_until

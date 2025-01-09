@@ -1,0 +1,3 @@
+"dataset_name": "human_sexuality"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_en_human_sexuality"

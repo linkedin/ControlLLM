@@ -1,0 +1,3 @@
+"dataset_name": "elementary_chinese"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_en_elementary_chinese"

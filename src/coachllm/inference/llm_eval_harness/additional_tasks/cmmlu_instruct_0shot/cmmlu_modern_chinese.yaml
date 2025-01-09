@@ -1,0 +1,3 @@
+"dataset_name": "modern_chinese"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_modern_chinese"

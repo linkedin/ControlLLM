@@ -1,0 +1,3 @@
+"dataset_name": "high_school_geography"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_high_school_geography"

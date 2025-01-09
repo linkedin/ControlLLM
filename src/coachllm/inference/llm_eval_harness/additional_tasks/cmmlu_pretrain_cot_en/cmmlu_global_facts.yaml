@@ -1,0 +1,3 @@
+"dataset_name": "global_facts"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_en_global_facts"

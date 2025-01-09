@@ -1,0 +1,13 @@
+{                                                                                                                                            
+    "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+    "fsdp_backward_prefetch_policy": "BACKWARD_PRE",
+    "fsdp_transformer_layer_cls_to_wrap": "LlamaDecoderLayer",
+    "fsdp_cpu_ram_efficient_loading": "true",
+    "fsdp_sync_module_states": "true",    
+    "fsdp_forward_prefetch": "false",
+    "fsdp_offload_params": "false",
+    "fsdp_activation_checkpointing": "true",
+    "fsdp_sharding_strategy": 4,
+    "fsdp_state_dict_type": "SHARDED_STATE_DICT",
+    "fsdp_use_orig_params": "true"
+}

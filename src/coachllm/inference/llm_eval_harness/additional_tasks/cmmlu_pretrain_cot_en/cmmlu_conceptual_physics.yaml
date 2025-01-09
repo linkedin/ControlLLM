@@ -1,0 +1,3 @@
+"dataset_name": "conceptual_physics"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_en_conceptual_physics"

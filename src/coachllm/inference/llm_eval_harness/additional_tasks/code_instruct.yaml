@@ -1,0 +1,13 @@
+group: code_instruct
+task:
+  - mbpp_sanitized_0shot_instruct
+  - mbpp_plus_0shot_instruct
+  - humaneval_greedy_instruct
+  - humaneval_plus_greedy_instruct
+aggregate_metric_list:
+  - aggregation: mean
+    metric: pass_at_1
+    weight_by_size: true
+    filter_list: n=1
+metadata:
+  version: 1.0

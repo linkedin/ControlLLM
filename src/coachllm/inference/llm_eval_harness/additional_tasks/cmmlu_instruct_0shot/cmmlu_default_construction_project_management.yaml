@@ -1,0 +1,3 @@
+"dataset_name": "construction_project_management"
+"include": "_default_template_yaml"
+"task": "cmmlu_instruct_construction_project_management"

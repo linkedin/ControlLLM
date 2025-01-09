@@ -1,0 +1,3 @@
+"dataset_name": "ancient_chinese"
+"include": "_default_template_yaml"
+"task": "cmmlu_pretrain_zh_ancient_chinese"

@@ -1,0 +1,9 @@
+group: meta_instruct
+task:
+  - meta_math_hard_0shot_instruct
+  - meta_math_0shot_instruct
+  - meta_gsm8k_8shot_instruct
+  - meta_gpqa_0shot_cot_instruct
+  - meta_mmlu_pro_5shot_instruct
+  - meta_mmlu_0shot_instruct
+  
