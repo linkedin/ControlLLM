@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     pass
 
 
-@register_model("llama_plus_vllm")
-class LlamaPlusWrapper(VLLM):
+@register_model("control_llm_vllm")
+class ControlLLMWrapper(VLLM):
     _DEFAULT_MAX_LENGTH = 2048
 
     def __init__(

@@ -41,8 +41,8 @@ from lm_eval.api.task import ConfigurableTask
 # noqa: E402, put it after os.environ to make sure we set os.environ["HF_DATASETS_CACHE"] after importing the datasets library
 from controlllm.inference.llm_eval_harness.control_llm_task import ControlLLMConfigTask
 from controlllm.inference.llm_eval_harness.control_llm_evaluator import evaluate
-from controlllm.inference.llm_eval_harness.llama_plus_hf import LlamaPlusWrapper as LlamaPlusWrapperHF
-from controlllm.inference.llm_eval_harness.llama_plus_vllm import LlamaPlusWrapper as LlamaPlusWrapperVLLM
+from controlllm.inference.llm_eval_harness.control_llm_hf import ControlLLMWrapper as ControlLLMWrapperHF
+from controlllm.inference.llm_eval_harness.control_llm_vllm import ControlLLMWrapper as ControlLLMWrapperVLLM
 from controlllm.utils.model_expander import ModelExpander
 
 
@@ -262,19 +262,19 @@ def evaluate_model(args, logger=None, loaded_model: PreTrainedModel=None, rank=0
 
     # Register the expanded model classes with new model architecture
     if loaded_model:
-        llama_plus_model = loaded_model.name_or_path  # make sure this is the path to the model in config.json, assuming the model is already registered by ModelExpander.register_expansion_classes
+        control_llm_model = loaded_model.name_or_path  # make sure this is the path to the model in config.json, assuming the model is already registered by ModelExpander.register_expansion_classes
     else:
         # Extract pretrained as a string from model_args and register the expanded model classe in huggingface transformers, assuming only one model is configured!
-        llama_plus_model = next((arg.split("=")[1] for arg in args.model_args.split(",") if arg.startswith("pretrained=")), None)
-        if not llama_plus_model:
+        control_llm_model = next((arg.split("=")[1] for arg in args.model_args.split(",") if arg.startswith("pretrained=")), None)
+        if not control_llm_model:
             raise ValueError(f"Could not find a valid model name or path from the provided model_args: {args.model_args}")
 
-        logging.info(f"Registering the expanded model classes with new model architecture from {llama_plus_model}...")
-        ModelExpander.register_expansion_classes(llama_plus_model, use_vllm=(args.model=="vllm"))
+        logging.info(f"Registering the expanded model classes with new model architecture from {control_llm_model}...")
+        ModelExpander.register_expansion_classes(control_llm_model, use_vllm=(args.model=="vllm"))
 
     task_manager, task_list = load_tasks(args)
-    logging.info(f"Running benchmark {task_list} on model: {llama_plus_model}...")
-    os.environ['MODEL_PATH'] = llama_plus_model  # tasks in additional_tasks needs this environment variable to load tokenizer for apply_chat_template, refer to additional_tasks/tokenizer.py
+    logging.info(f"Running benchmark {task_list} on model: {control_llm_model}...")
+    os.environ['MODEL_PATH'] = control_llm_model  # tasks in additional_tasks needs this environment variable to load tokenizer for apply_chat_template, refer to additional_tasks/tokenizer.py
     # Customized model such as Quantized model etc.
     # In case you are working with a custom model, you can use the following guide to add it here:
     # https://github.com/EleutherAI/lm-evaluation-harness/blob/main/docs/interface.md#external-library-usage
@@ -283,14 +283,14 @@ def evaluate_model(args, logger=None, loaded_model: PreTrainedModel=None, rank=0
     # evaluate with customized lm-evaluation-harness/vLLM class by DDP
     if args.model == "vllm":
         # DDP by num_gpus, tensor_parallel_size=1, without model parallelism
-        # note: trained_from is required for vLLM to register the expanded model classes, for none expanded model class, it is not required but still okay to provide. TODO: check if it is required, remove trained_from={llama_plus_model} if not required
+        # note: trained_from is required for vLLM to register the expanded model classes, for none expanded model class, it is not required but still okay to provide. TODO: check if it is required, remove trained_from={control_llm_model} if not required
         # note: As for `add_bos_token=True`, since our prompts in the evals dataset has already included all the special tokens required by instruct model, such as `<|start_header_id|>user<|end_header_id|>`, we will not use `--apply_chat_template` argument for instruct models anymore. However, we need to use `add_bos_token=True` flag to add the BOS_token back during VLLM inference, as the BOS_token is removed by default in [this PR](https://github.com/EleutherAI/lm-evaluation-harness/pull/1465).
         if args.model_args == f"pretrained={os.environ['MODEL_PATH']},dtype=bfloat16":
             num_gpus = torch.cuda.device_count()
             # add vllm parameter if args.model_args is default, so it is still configurable TODO: make this as default in parse_eval_args for vLLM instead of here
-            args.model_args += f",tensor_parallel_size=1,gpu_memory_utilization=0.8,data_parallel_size={num_gpus},max_model_len=8192,enable_prefix_caching=True,{'' if args.apply_chat_template else 'add_bos_token=True'},seed=42,trained_from={llama_plus_model}"
+            args.model_args += f",tensor_parallel_size=1,gpu_memory_utilization=0.8,data_parallel_size={num_gpus},max_model_len=8192,enable_prefix_caching=True,{'' if args.apply_chat_template else 'add_bos_token=True'},seed=42,trained_from={control_llm_model}"
         model_args_dict = utils.simple_parse_args_string(args.model_args)
-        lm_llama_plus_vllm = LlamaPlusWrapperVLLM.create_from_arg_obj(
+        lm_control_llm_vllm = ControlLLMWrapperVLLM.create_from_arg_obj(
             model_args_dict,
             {
                 "batch_size": args.batch_size,
@@ -298,8 +298,8 @@ def evaluate_model(args, logger=None, loaded_model: PreTrainedModel=None, rank=0
                 "device": args.device,
             },
         )
-        # lm_llama_plus_vllm = LlamaPlusWrapperVLLM(**model_args_dict)
-        args.model = lm_llama_plus_vllm
+        # lm_control_llm_vllm = ControlLLMWrapperVLLM(**model_args_dict)
+        args.model = lm_control_llm_vllm
     # evaluate with customized lm-evaluation-harness/HF(huggingface transformers lib) class by DDP
     elif args.model == "hf":
         if args.model_args == f"pretrained={os.environ['MODEL_PATH']},dtype=bfloat16":
@@ -310,7 +310,7 @@ def evaluate_model(args, logger=None, loaded_model: PreTrainedModel=None, rank=0
         if loaded_model:
             model_args_dict["pretrained"] = loaded_model
 
-        lm_llama_plus_hf = LlamaPlusWrapperHF.create_from_arg_obj(
+        lm_control_llm_hf = ControlLLMWrapperHF.create_from_arg_obj(
             model_args_dict,
             {
                 "batch_size": args.batch_size,
@@ -318,8 +318,8 @@ def evaluate_model(args, logger=None, loaded_model: PreTrainedModel=None, rank=0
                 "device": args.device,
             },
         )
-        # lm_llama_plus_hf = LlamaPlusWrapperHF(**model_args_dict)
-        args.model = lm_llama_plus_hf
+        # lm_control_llm_hf = ControlLLMWrapperHF(**model_args_dict)
+        args.model = lm_control_llm_hf
 
     # Run benchmark
     results = lm_eval.simple_evaluate(

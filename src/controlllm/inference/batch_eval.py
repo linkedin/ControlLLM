@@ -356,9 +356,9 @@ class EvaluationEngine(InferenceEngine):
                     num_gpus = 1  # set it to 1 to debug vLLM with single GPU without ray worker
                 else:
                     num_gpus = torch.cuda.device_count()
-                if num_gpus == 1:  # for multi-process/GPU, llama_plus_vllm.py uses ray so leave it to each worker to do init_distributed_mode. for single process, set up GPU here
+                if num_gpus == 1:  # for multi-process/GPU, control_llm_vllm.py uses ray so leave it to each worker to do init_distributed_mode. for single process, set up GPU here
                     setup_utils.init_distributed_mode(self.configs.setup_config)
-                # note: trained_from is required for vLLM to register the expanded model classes, for none expanded model class, it is not required but still okay to provide. TODO: check if it is required, remove register_model={llama_plus_model} if not required
+                # note: trained_from is required for vLLM to register the expanded model classes, for none expanded model class, it is not required but still okay to provide. TODO: check if it is required, remove register_model={control_llm_model} if not required
                 # note: As for `add_bos_token=True`, since our prompts in the evals dataset has already included all the special tokens required by instruct model, such as `<|start_header_id|>user<|end_header_id|>`, we will not use `--apply_chat_template` argument for instruct models anymore. However, we need to use `add_bos_token=True` flag to add the BOS_token back during VLLM inference, as the BOS_token is removed by default in [this PR](https://github.com/EleutherAI/lm-evaluation-harness/pull/1465).
                 # TODO: make this as input parameter instead of here
                 args.model_args += f",tensor_parallel_size=1,gpu_memory_utilization={self.gpu_memory_utilization},data_parallel_size={num_gpus},max_model_len={self.max_model_len},cpu_offload_gb={self.cpu_offload_gb},enable_prefix_caching={self.enable_prefix_caching},{'' if self.apply_chat_template else 'add_bos_token=True,'}seed=42,{('register_model=' + self.model_checkpoint_path) if self.trained_from and num_gpus > 1 else ''}"

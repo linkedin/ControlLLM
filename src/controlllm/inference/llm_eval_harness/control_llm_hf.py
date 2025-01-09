@@ -22,8 +22,8 @@ from controlllm.utils.model_expander import ModelExpander
 eval_logger = utils.eval_logger
 
 
-@register_model("llama_plus")
-class LlamaPlusWrapper(HFLM):
+@register_model("control_llm")
+class ControlLLMWrapper(HFLM):
     def __init__(
         self,
         pretrained: Union[str, PreTrainedModel] = "",
@@ -207,7 +207,7 @@ class LlamaPlusWrapper(HFLM):
             generation_kwargs: Additional generation kwargs.
         """
         logging.info(f"--> Benchmark Dataset example input: {self.tokenizer.decode(context[0], skip_special_tokens=False)}")
-        results = super(LlamaPlusWrapper, self)._model_generate(
+        results = super(ControlLLMWrapper, self)._model_generate(
             context=context,
             max_length=max_length,
             stop=stop,
