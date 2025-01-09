@@ -1,3 +1,8 @@
+![control_llm_sota_comparison](https://github.com/user-attachments/assets/0f812d8a-ca2f-458b-a5bb-727cdf916ba2)
+![control_llm_architecture](https://github.com/user-attachments/assets/418a4c2b-d94e-4add-8b08-6213a0e6e15e)
+![catastrophic_forgetting_openmath](https://github.com/user-attachments/assets/caca0429-71a8-4a37-8f36-9c99d2262780)
+![catastrophic_forgetting_opencoder](https://github.com/user-attachments/assets/e2f6fa75-3519-45b3-97e2-577fad762544)
+![alignment_comparison](https://github.com/user-attachments/assets/f00bf1c5-687e-4265-af1e-6ea43886f4a6)
 
 This repo is to fine tune llm by Contro LLM with pre-training and sft. It supports following:
 
@@ -6,7 +11,8 @@ This repo is to fine tune llm by Contro LLM with pre-training and sft. It suppor
 - Training data connecting to HDFS, integration with any huggingface datasets, data preprocessing plugin, converting to feature, caching, packing etc. Time to first training iteration for 20M+ data points is ~2 minutes
 - Efficient Distributed training with flash attention, model shading(fsdp/hsfp/deepspeed), mixed precision training, gradient accumulation, gradient clipping, PEFT, quantized training, multi-node, etc. all with debugging and profiling capability
 - Model auto evaluation and distributed model saving
-
+- Model Probing
+- Model benchmarking
 
 ### Add new dataset from huggingface for training
 
