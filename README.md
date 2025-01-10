@@ -6,7 +6,7 @@ Large Language Models (LLMs) demand significant computational resources, making 
 
 We propose **Control LLM**, a novel approach that leverages parallel pre-trained and expanded transformer blocks, aligning their hidden states through interpolation strategies. This method effectively preserves performance on existing tasks while seamlessly integrating new knowledge.
 
-### Key Contributions
+#### Key Contributions
 
 1. **Performance Improvement**: 
    - **Mathematical Reasoning**: Achieves significant improvements, e.g., +14.4% on Math-Hard.
@@ -22,13 +22,13 @@ We propose **Control LLM**, a novel approach that leverages parallel pre-trained
 
 3. **Real-World Deployment**: Successfully deployed in LinkedIn's GenAI-powered job seeker and Ads unit products.
 
-### Benefits of Control LLM
+#### Benefits of Control LLM
 
 - Preserves performance on existing tasks while integrating new knowledge.
 - Reduces catastrophic forgetting during continuous training and fine-tuning.
 - Enhances LLM performance across a variety of domains, including reasoning, coding, and multilingual tasks.
 
-### Code and Models
+#### Code and Models
 
 To support further research and collaboration, we release:
 
