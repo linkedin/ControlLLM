@@ -1,10 +1,45 @@
+### Control LLM: Enhancing Large Language Models Without Catastrophic Forgetting
+
 ### Introduction
 
-Large Language Models (LLMs) demand significant computational resources, making it essential to enhance their capabilities without retraining from scratch. A key challenge in this domain is \textit{catastrophic forgetting} (CF), which hampers performance during Continuous Pre-training (CPT) and Continuous Supervised Fine-Tuning (CSFT). We propose \textbf{Control LLM}, a novel approach that leverages parallel pre-trained and expanded transformer blocks, aligning their hidden-states through interpolation strategies This method effectively preserves performance on existing tasks while seamlessly integrating new knowledge.
+Large Language Models (LLMs) demand significant computational resources, making it essential to enhance their capabilities without retraining from scratch. A key challenge in this domain is *catastrophic forgetting* (CF), which hampers performance during Continuous Pre-training (CPT) and Continuous Supervised Fine-Tuning (CSFT).
 
-Extensive experiments demonstrate the effectiveness of Control LLM in both CPT and CSFT. On Llama3.1-8B-Instruct, it achieves significant improvements in mathematical reasoning ($+14.4\%$ on Math-Hard) and coding performance ($+10\%$ on MBPP-PLUS). On Llama3.1-8B, it enhances multilingual capabilities ($+10.6\%$ on C-Eval, $+6.8\%$ on CMMLU, and $+30.2\%$ on CMMLU-0shot-CoT). It surpasses existing methods and achieves SOTA among open-source models tuned from the same base model, using substantially less data and compute. Crucially, these gains are realized while preserving strong original capabilities, with minimal degradation ($<4.3\% \text{on MMLU}$) compared to $>35\%$ in open-source Math and Coding models. This approach has been successfully deployed in LinkedIn's GenAI-powered job seeker and Ads unit products.
+We propose **Control LLM**, a novel approach that leverages parallel pre-trained and expanded transformer blocks, aligning their hidden states through interpolation strategies. This method effectively preserves performance on existing tasks while seamlessly integrating new knowledge.
 
-To support further research, we release the training and evaluation codebase\footnote{Code: https://github.com/linkedin/ControlLLM}, along with models trained on public datasets\footnote{Models: https://huggingface.co/ControlLLM}, to the community.
+### Key Contributions
+
+1. **Performance Improvement**: 
+   - **Mathematical Reasoning**: Achieves significant improvements, e.g., +14.4% on Math-Hard.
+   - **Coding Performance**: Improves coding capabilities by +10% on MBPP-PLUS.
+   - **Multilingual Capabilities**: Enhances multilingual benchmarks, including:
+     - +10.6% on C-Eval.
+     - +6.8% on CMMLU.
+     - +30.2% on CMMLU-0shot-CoT.
+
+2. **State-of-the-Art Results**: 
+   - Surpasses existing methods and achieves SOTA among open-source models tuned from the same base model, using substantially less data and compute.
+   - Maintains strong original capabilities with minimal degradation (<4.3% on MMLU) compared to >35% observed in other open-source Math and Coding models.
+
+3. **Real-World Deployment**: Successfully deployed in LinkedIn's GenAI-powered job seeker and Ads unit products.
+
+### Benefits of Control LLM
+
+- Preserves performance on existing tasks while integrating new knowledge.
+- Reduces catastrophic forgetting during continuous training and fine-tuning.
+- Enhances LLM performance across a variety of domains, including reasoning, coding, and multilingual tasks.
+
+### Code and Models
+
+To support further research and collaboration, we release:
+
+- **Training and Evaluation Codebase**: [GitHub Repository](https://github.com/linkedin/ControlLLM)
+- **Trained Models**: [Hugging Face Models](https://huggingface.co/ControlLLM)
+
+We invite the community to explore, experiment, and contribute to advancing LLM research.
+
+---
+
+Feel free to reach out with feedback, suggestions, or contributions via the [GitHub Issues](https://github.com/linkedin/ControlLLM/issues) section.
 
 ### Control LLM model performance
 ![control_llm_sota_comparison](https://github.com/user-attachments/assets/0f812d8a-ca2f-458b-a5bb-727cdf916ba2)
@@ -12,17 +47,35 @@ To support further research, we release the training and evaluation codebase\foo
 ### Control LLM architecture
 ![control_llm_architecture](https://github.com/user-attachments/assets/418a4c2b-d94e-4add-8b08-6213a0e6e15e)
 
-### Control LLM code base
+### Control LLM Code Base
 
-This repo is to fine tune llm by Contro LLM with pre-training and sft. It supports following:
+This repository provides tools to fine-tune LLMs using Control LLM with both pre-training and supervised fine-tuning (SFT). It supports the following features:
 
-- Training with two alternative trainers, native pytorch trainer and transformers trainer
-- Default training, dataset, modeling loading config set up
-- Training data connecting to HDFS, integration with any huggingface datasets, data preprocessing plugin, converting to feature, caching, packing etc. Time to first training iteration for 20M+ data points is ~2 minutes
-- Efficient Distributed training with flash attention, model shading(fsdp/hsfp/deepspeed), mixed precision training, gradient accumulation, gradient clipping, PEFT, quantized training, multi-node, etc. all with debugging and profiling capability
-- Model auto evaluation and distributed checkpoint saving/conversion
-- Model Test and Probing
-- Model benchmarking for most of open LLM benchmark tasks
+- **Flexible Training Options**:
+  - Two alternative trainers: native PyTorch trainer and HuggingFace Transformers trainer.
+
+- **Streamlined Configuration**:
+  - Default setup for training, dataset, and model-loading configurations.
+
+- **Advanced Data Handling**:
+  - Seamless integration with HDFS and any HuggingFace datasets.
+  - Support for data preprocessing plugins, feature conversion, caching, and packing.
+  - Efficient setup: time to the first training iteration for datasets with 20M+ data points is approximately **2 minutes**.
+
+- **Efficient Distributed Training**:
+  - Features include flash attention, model sharding (FSDP/HSFP/DeepSpeed), mixed precision training, gradient accumulation, gradient clipping, parameter-efficient fine-tuning (PEFT), quantized training, multi-node training, and more.
+  - Comprehensive debugging and profiling capabilities.
+
+- **Automated Model Evaluation**:
+  - Distributed checkpoint saving and conversion.
+
+- **Model Testing and Probing**:
+  - Tools for systematic evaluation of model performance and behavior.
+
+- **Benchmarking Support**:
+  - Benchmarking capabilities for most open LLM benchmark tasks.
+
+This codebase is designed for efficient and scalable fine-tuning of large language models, enabling researchers and developers to achieve high performance with minimal setup time.
 
 #### Add new dataset from huggingface for training
 
