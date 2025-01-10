@@ -1,10 +1,18 @@
-## Control LLM model performance
+### Introduction
+
+Large Language Models (LLMs) demand significant computational resources, making it essential to enhance their capabilities without retraining from scratch. A key challenge in this domain is \textit{catastrophic forgetting} (CF), which hampers performance during Continuous Pre-training (CPT) and Continuous Supervised Fine-Tuning (CSFT). We propose \textbf{Control LLM}, a novel approach that leverages parallel pre-trained and expanded transformer blocks, aligning their hidden-states through interpolation strategies This method effectively preserves performance on existing tasks while seamlessly integrating new knowledge.
+
+Extensive experiments demonstrate the effectiveness of Control LLM in both CPT and CSFT. On Llama3.1-8B-Instruct, it achieves significant improvements in mathematical reasoning ($+14.4\%$ on Math-Hard) and coding performance ($+10\%$ on MBPP-PLUS). On Llama3.1-8B, it enhances multilingual capabilities ($+10.6\%$ on C-Eval, $+6.8\%$ on CMMLU, and $+30.2\%$ on CMMLU-0shot-CoT). It surpasses existing methods and achieves SOTA among open-source models tuned from the same base model, using substantially less data and compute. Crucially, these gains are realized while preserving strong original capabilities, with minimal degradation ($<4.3\% \text{on MMLU}$) compared to $>35\%$ in open-source Math and Coding models. This approach has been successfully deployed in LinkedIn's GenAI-powered job seeker and Ads unit products.
+
+To support further research, we release the training and evaluation codebase\footnote{Code: https://github.com/linkedin/ControlLLM}, along with models trained on public datasets\footnote{Models: https://huggingface.co/ControlLLM}, to the community.
+
+### Control LLM model performance
 ![control_llm_sota_comparison](https://github.com/user-attachments/assets/0f812d8a-ca2f-458b-a5bb-727cdf916ba2)
 
-## Control LLM architecture
+### Control LLM architecture
 ![control_llm_architecture](https://github.com/user-attachments/assets/418a4c2b-d94e-4add-8b08-6213a0e6e15e)
 
-## Control LLM code base
+### Control LLM code base
 
 This repo is to fine tune llm by Contro LLM with pre-training and sft. It supports following:
 
@@ -12,11 +20,11 @@ This repo is to fine tune llm by Contro LLM with pre-training and sft. It suppor
 - Default training, dataset, modeling loading config set up
 - Training data connecting to HDFS, integration with any huggingface datasets, data preprocessing plugin, converting to feature, caching, packing etc. Time to first training iteration for 20M+ data points is ~2 minutes
 - Efficient Distributed training with flash attention, model shading(fsdp/hsfp/deepspeed), mixed precision training, gradient accumulation, gradient clipping, PEFT, quantized training, multi-node, etc. all with debugging and profiling capability
-- Model auto evaluation and distributed model saving
-- Model Probing
-- Model benchmarking
+- Model auto evaluation and distributed checkpoint saving/conversion
+- Model Test and Probing
+- Model benchmarking for most of open LLM benchmark tasks
 
-### Add new dataset from huggingface for training
+#### Add new dataset from huggingface for training
 
 - check if the dataset already exists in the nfs folder, e.g. /controlllm/huggingface/datasets
 - if not, a simple way is to first cache the dataset locally by:
@@ -37,7 +45,7 @@ cp -r ~/.cache/huggingface/datasets/<your datasets>/ /shared/controlllm/huggingf
 # e.g.
 cp -r ~/.cache/huggingface/datasets/samsum/ /shared/controlllm/huggingface/datasets
 
-### Setting up the dev env
+#### Setting up the dev env
 
 - Check cuda version:
 
@@ -60,14 +68,14 @@ sh ControlLLM/src/controlllm/script/100-setup.sh
 from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
 ```
 
-### If the dev env is all working, congrats, now run the training pipeline
+#### If the dev env is all working, congrats, now run the training pipeline
 
 - trigger the training job
 ```bash
 torchrun --nproc_per_node=8 ./src/controlllm/main.py
 ```
 
-### Iterate and Debug the code
+#### Iterate and Debug the code
 Debug large model that can't be loaded in single GPU(80GB), set this in .vscode/launch.json, together with fsdp or deepspeed in the code, debugger will be launched with model sharding:
 
 ```bash
@@ -105,11 +113,11 @@ pkill -9 -f '/bin/python'
 pkill -9 -f 'ray::run_inference_one_model'
 ```
 
-### Train the model
+#### Train the model
 
 - Detailed Steps:
 
-#### Step 1: go to ./src/controlllm/scripts/200-run.sh, set up NUM_NODES to 3, uncomment one of following trainer alternative. You only need to specify TRAINER and dataset!
+##### Step 1: go to ./src/controlllm/scripts/200-run.sh, set up NUM_NODES to 3, uncomment one of following trainer alternative. You only need to specify TRAINER and dataset!
 
 ```bash
 ...
@@ -130,7 +138,7 @@ torchrun --nnodes=$NUM_NODES --nproc-per-node=$LOCAL_WORLD_SIZE \
       --dataset OpenMathInstruct2Dataset \
 ```
 
-#### Step 2: set up the right config with best practice:
+##### Step 2: set up the right config with best practice:
 
 Note: in order to speed up training, there are 3 different combinations of configurations recommended to set before launching the training with "mldev run"(trainer config is in step 2):
 
@@ -210,7 +218,7 @@ Note: for multi-node training, double check three configs for number of nodes an
     export WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
 ```
 
-#### Step 3: launch the training with tmux:
+##### Step 3: launch the training with tmux:
 
 ```bash
 export LANG=en_US.UTF-8
@@ -272,7 +280,7 @@ go to ./src/controlllm/configs/training.py, set either flop_counter to True or u
     profiler_dir: str = "/home/jobuser/profiler_results"  # will be used if using profiler
 ```
 
-### Evaluate the model
+#### Evaluate the model
 - lm-evaluation-harness is used to evaluate the model on openllm leaderboard tasks
 
 ```bash
@@ -318,7 +326,7 @@ The remote code for computing metrics is in ./src/controlllm/metrics, copy it ov
 
 <img width="430" alt="image" src="https://github.com/user-attachments/assets/ac8c36bc-938c-49ef-b011-977caee0b79c">
 
-### Test the model
+#### Test the model
 - go to ./src/controlllm/inference/chat_completion.py, set vllm_model_path to the model checkpoint directory, for smaller model such as 8b, single GPU is enough, go to ./.vscode/launch.json, set nproc_per_node==1.
 
 ```bash
@@ -337,7 +345,7 @@ The remote code for computing metrics is in ./src/controlllm/metrics, copy it ov
     parser.add_argument("--hf_model_path_or_name", type=str, default="/shared/models/Meta-Llama-3-8B", help="Path/ name of the HF model that include config.json and tokenizer_config.json (e.g. meta-llama/Llama-2-7b-chat-hf)")
 ```
 
-### Reference:
+#### Reference:
 - https://github.com/mosaicml/llm-foundry
 - https://github.com/togethercomputer/OpenChatKit
 - https://github.com/young-geng/EasyLM
