@@ -100,6 +100,38 @@ cp -r ~/.cache/huggingface/datasets/samsum/ /shared/controlllm/huggingface/datas
 
 #### Setting up the dev env
 
+- Install git lfs
+
+```bash
+check if it is already installed: git lfs install
+install lfs if not yet: sudo yum install git-lfs
+check if lfs is working: git lfs version
+```
+
+- Git clone and pull with lfs
+```bash
+git clone https://github.com/linkedin/ControlLLM.git
+git lfs pull
+```
+
+- Pull in submodule(lm-evaluation-harness)
+```bash
+git submodule update --init --recursive
+```
+
+- Create a folder for the script, e.g. /home/jobuser:
+```bash
+mkdir /home/jobuser/
+mkdir /home/jobuser/resources/
+```
+
+- Move script to the folder, e.g. /home/jobuser:
+```bash
+cp -r ControlLLM/src/controlllm /home/jobuser/
+cp -r ControlLLM/lm-evaluation-harness /home/jobuser/resources/
+cp ControlLLM/wheels/* /home/jobuser/resources/
+```
+
 - Check cuda version:
 
 /usr/local/cuda/bin/nvcc --version
@@ -113,7 +145,7 @@ cd ControlLLM/src/controlllm
 pip install -r requirements.txt
 
 or 
-sh ControlLLM/src/controlllm/script/100-setup.sh
+sh /home/jobuser/controlllm/script/100-setup.sh
 ```
 
 - Test the flash-attn by run python:
@@ -125,7 +157,7 @@ from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
 
 - trigger the training job
 ```bash
-torchrun --nproc_per_node=8 ./src/controlllm/main.py
+torchrun --nproc_per_node=8 /home/jobuser/controlllm/main.py
 ```
 
 #### Iterate and Debug the code
@@ -139,7 +171,7 @@ Debug large model that can't be loaded in single GPU(80GB), set this in .vscode/
             "name": "Python: Current File",
             "type": "python",
             "request": "launch",
-            "program": "/home/user/.local/lib/python3.10/site-packages/torch/distributed/run.py",
+            "program": "/home/jobuser/.local/lib/python3.10/site-packages/torch/distributed/run.py",
             "console": "integratedTerminal",
             "args": [
                 "--nproc_per_node=8",
@@ -170,7 +202,7 @@ pkill -9 -f 'ray::run_inference_one_model'
 
 - Detailed Steps:
 
-##### Step 1: go to ./src/controlllm/scripts/200-run.sh, set up NUM_NODES to 3, uncomment one of following trainer alternative. You only need to specify TRAINER and dataset!
+#### Step 1: go to /home/jobuser/controlllm/scripts/200-run.sh, set up NUM_NODES to 3, uncomment one of following trainer alternative. You only need to specify TRAINER and dataset!
 
 ```bash
 ...
@@ -181,13 +213,13 @@ export TRAINER=native
 # native torch trainer:
 torchrun --nnodes=$NUM_NODES --nproc-per-node=$LOCAL_WORLD_SIZE \
       --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT" --rdzv_id=1234 --rdzv_backend=c10d \
-      ./src/controlllm/main.py \
+      /home/jobuser/controlllm/main.py \
       --dataset OpenMathInstruct2Dataset \
 
 # transformer trainer:
 torchrun --nnodes=$NUM_NODES --nproc-per-node=$LOCAL_WORLD_SIZE \
       --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT" --rdzv_id=1234 --rdzv_backend=c10d \
-      ./src/controlllm/main.py \
+      /home/jobuser/controlllm/main.py \
       --dataset OpenMathInstruct2Dataset \
 ```
 
@@ -197,13 +229,13 @@ Note: in order to speed up training, there are 3 different combinations of confi
 
 - native trainer with fsdp
 
-go to ./src/controlllm/config/training.py, set enable_fsdp to True
+go to /home/jobuser/controlllm/config/training.py, set enable_fsdp to True
 ```bash
     # note: only one of fsdp or deepspeed can be enabled at a time, for transformers trainer, config TrainConfigTransformers->"deepspeed, fsdp, fsdp_config"
     enable_fsdp: bool = True  # enable fsdp for training, for native trainer, fsdp config is in ./configs/fsdp.py
     enable_deepspeed: bool = False  # enable deep speed for training 
 ```
-go to ./src/controlllm/config/fsdp.py, set hsdp to True and sharding_group_size to 8(8 GPUs per node), replica_group_size to 3(number of nodes)
+go to /home/jobuser/controlllm/config/fsdp.py, set hsdp to True and sharding_group_size to 8(8 GPUs per node), replica_group_size to 3(number of nodes)
 ```bash
     hsdp: bool = True
     # requires hsdp to be set. This specifies the sharding group size, number of GPUs that you model can fit into to form a replica of a model.
@@ -213,13 +245,13 @@ go to ./src/controlllm/config/fsdp.py, set hsdp to True and sharding_group_size 
 
 - transformer trainer with fsdp
 
-go to ./src/controlllm/config/training.py -> TrainConfigCommon, set enable_fsdp to True
+go to /home/jobuser/controlllm/config/training.py -> TrainConfigCommon, set enable_fsdp to True
 ```bash
     # note: only one of fsdp or deepspeed can be enabled at a time, for transformers trainer, config TrainConfigTransformers->"deepspeed, fsdp, fsdp_config"
     enable_fsdp: bool = True  # enable fsdp for training, for native trainer, fsdp config is in ./configs/fsdp.py
     enable_deepspeed: bool = False  # enable deep speed for training 
 ```
-go to ./src/controlllm/config/training.py -> TrainConfigTransformers, set fsdp strategy and config
+go to /home/jobuser/controlllm/config/training.py -> TrainConfigTransformers, set fsdp strategy and config
 ```bash
     # deepspeed: str = "/home/jobuser/controlllm/configs/z3_++.json"
     fsdp: str = "full_shard auto_wrap"
@@ -228,14 +260,14 @@ go to ./src/controlllm/config/training.py -> TrainConfigTransformers, set fsdp s
 
 - transformer trainer with deepspeed
 
-go to ./src/controlllm/config/training.py -> TrainConfigCommon, set enable_fsdp to True
+go to /home/jobuser/controlllm/config/training.py -> TrainConfigCommon, set enable_fsdp to True
 ```bash
     # note: only one of fsdp or deepspeed can be enabled at a time, for transformers trainer, config TrainConfigTransformers->"deepspeed, fsdp, fsdp_config"
     enable_fsdp: bool = False  # enable fsdp for training, for native trainer, fsdp config is in ./configs/fsdp.py
     enable_deepspeed: bool = True  # enable deep speed for training 
 ```
 
-go to ./src/controlllm/config/training.py -> TrainConfigTransformers, set deepspeed config
+go to /home/jobuser/controlllm/config/training.py -> TrainConfigTransformers, set deepspeed config
 ```bash
     deepspeed: str = "/home/jobuser/controlllm/configs/z3_++.json"
     # fsdp: str = "full_shard auto_wrap"
@@ -244,17 +276,7 @@ go to ./src/controlllm/config/training.py -> TrainConfigTransformers, set deepsp
 
 Note: for multi-node training, double check three configs for number of nodes and make sure they are consistent before "mldev run", here is an example for training with 4 nodes.
 
-- go to ./src/controlllm/flows/llm_finetuning.py, double check "num_workers"
-```bash
-    enable_nfs=True,
-    # Note that to make qgZ work(zero_quantized_gradients): only magic number of nodes will work, one of [1, 2, 3, 5, 8, 16, 32, 40, 64, 80 ...] - 1 
-    task_config=PyTorch(num_workers=3),  # 0 means 1 node, 1 means 2 nodes, 2 means 3 nodes
-    # container_image="docker.artifactory-test.corp.linkedin.com/haichao/llm/h100:0.0.1",
-    # container_image="docker.artifactory-test.corp.linkedin.com/mdong/pytorch:0.0.2",
-    container_image="{{.image.mldev_torch_image}}",
-```
-
-- go to ./src/controlllm/configs/fsdp.py, double check "replica_group_size"
+- go to /home/jobuser/controlllm/configs/fsdp.py, double check "replica_group_size"
 ```bash
     hsdp: bool = True
     # requires hsdp to be set. This specifies the sharding group size, number of GPUs that you model can fit into to form a replica of a model.
@@ -262,7 +284,7 @@ Note: for multi-node training, double check three configs for number of nodes an
     replica_group_size: int = 4  # requires hsdp to be set. Specifies the replica group size, which is world_size/sharding_group_size, change this to the actual number of nodes!
 ```
 
-- go to ./src/controlllm/scripts/200-run.sh, double check "NUM_NODES"
+- go to /home/jobuser/controlllm/scripts/200-run.sh, double check "NUM_NODES"
 ```bash
     export GPUS_PER_NODE=$(nvidia-smi --list-gpus|wc -l)
     export LOCAL_WORLD_SIZE=$GPUS_PER_NODE
@@ -278,11 +300,11 @@ export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
 # single-node example:
-tmux new -s session_name -d "torchrun --nproc-per-node=8 ./src/controllm/main.py"
+tmux new -s session_name -d "torchrun --nproc-per-node=8 /home/jobuser/controllm/main.py"
 
 # multi-node example:
-tmux new -s session_name -d "sh controlllm/scripts/100-setup.sh"
-tmux new -s session_name -d "sh controlllm/scripts/200-run.sh"
+tmux new -s session_name -d "sh /home/jobuser/controlllm/scripts/100-setup.sh"
+tmux new -s session_name -d "sh /home/jobuser/controlllm/scripts/200-run.sh"
 
 to attach:
 tmux ls
@@ -294,7 +316,7 @@ tmux kill-session -t session_name
 
 - monitor the job via tensorboard:
 ```bash
-# run this in any running pod with interactive dev model, note that the tensorboard writes to ./src/controlllm/configs/training.py -> output_dir
+# run this in any running pod with interactive dev model, note that the tensorboard writes to /home/jobuser/controlllm/configs/training.py -> output_dir
 tensorboard --logdir <output_dir> --port 8081
 ```
 
@@ -311,7 +333,7 @@ pip install torch-tb-profiler
 tensorboard --logdir <output_dir>/profiler
 ```
 - Note that for metrics report to tensorboard to wandb to work:
-go to ./src/controlllm/configs/training.py, set enable_tensorboard and use_wandb to True for native trainer and report_to: str = "all" for transformers trainer.
+go to /home/jobuser/controlllm/configs/training.py, set enable_tensorboard and use_wandb to True for native trainer and report_to: str = "all" for transformers trainer.
 
 ```bash
 enable_tensorboard: bool = True  # enable tensorboard for training
@@ -319,7 +341,7 @@ use_wandb: bool = False  # enable wandb to log the experiment
 ```
 
 - Note that for profiler to work:
-go to ./src/controlllm/configs/training.py, set either flop_counter to True or use_profiler to True. flop_counter == True does not work together with triton kernel optimization(./src/controlllm/utils/triton_kernels) yet due to one bug in torch, fixed in torch 2.4.1. While waiting for torch 2.4.1 to work with rest of eco-system, flash-attn etc., please disable triton kernel optimization in ./src/controlllm/main.py by commentting out the code line 21 and 22.
+go to /home/jobuser/controlllm/configs/training.py, set either flop_counter to True or use_profiler to True. flop_counter == True does not work together with triton kernel optimization(/home/jobuser/controlllm/utils/triton_kernels) yet due to one bug in torch, fixed in torch 2.4.1. While waiting for torch 2.4.1 to work with rest of eco-system, flash-attn etc., please disable triton kernel optimization in /home/jobuser/controlllm/main.py by commentting out the code line 21 and 22.
 
 ```bash
     enable_tensorboard: bool = True  # enable tensorboard for training
@@ -338,18 +360,18 @@ go to ./src/controlllm/configs/training.py, set either flop_counter to True or u
 
 ```bash
 # single GPU:
-MODEL_PATH=<model_checkpoint> python python ./src/controlllm/inference/batch_eval.py
+MODEL_PATH=<model_checkpoint> python python /home/jobuser//controlllm/inference/batch_eval.py
 
 # multiple GPUs:
-MODEL_PATH=<model_checkpoint> accelerate launch accelerate launch ./src/controlllm/inference/batch_eval.py
+MODEL_PATH=<model_checkpoint> accelerate launch accelerate launch /home/jobuser/controlllm/inference/batch_eval.py
 
 # in tmux
-tmux new -s session_name -d "MODEL_PATH=<model_checkpoint>  accelerate launch ./src/controlllm/inference/batch_eval.py"
-tmux new -s session_name -d "MODEL_PATH=<model_checkpoint> python ./src/controlllm/inference/batch_eval.py"
+tmux new -s session_name -d "MODEL_PATH=<model_checkpoint>  accelerate launch /home/jobuser/controlllm/inference/batch_eval.py"
+tmux new -s session_name -d "MODEL_PATH=<model_checkpoint> python /home/jobuser/controlllm/inference/batch_eval.py"
 tmux attach -t session_name
 ```
 
-- Note that during auto eval with distributed metrics calculation is enabled during training, and also reported to tensorboard, go to ./src/controlllm/configs/training.py -> run_validation == True and enable_tensorboard == True, adjust the cadence by eva_steps e.g.
+- Note that during auto eval with distributed metrics calculation is enabled during training, and also reported to tensorboard, go to /home/jobuser/controlllm/configs/training.py -> run_validation == True and enable_tensorboard == True, adjust the cadence by eva_steps e.g.
 
 ```bash
 ...
@@ -359,7 +381,7 @@ tmux attach -t session_name
     eval_steps: int = 1000
     # stop by max_eval_step for eval, set to 0 or negative to disable it
     max_eval_step: int = 20
-    hf_hub_metrics_cache_dir: str = "/shared/metrics/"  # cache for huggingface metrics, it also caches the code of the metrics calculation which can be customized via remote code
+    hf_hub_metrics_cache_dir: str = "/shared/metrics/"  # nfs folder to cache for huggingface metrics, it also caches the code of the metrics calculation which can be customized via remote code
 ...
 
 # expect this in the training log and all metrics in tensorboard
@@ -373,24 +395,24 @@ tmux attach -t session_name
     resume_checkpoint_folder: str = "checkpoint-8500"  # "checkpoint-3", change 3 to the global step of the checkpoint you want to load, None to respect resume_from_latest
 ```
 
-The remote code for computing metrics is in ./src/controlllm/metrics, copy it over to the configured location of hf_hub_metrics_cache_dir before starting the distributed evaluation or training job.
+The remote code for computing metrics is in /home/jobuser/controlllm/metrics, copy it over to the configured location of hf_hub_metrics_cache_dir before starting the distributed evaluation or training job.
 
 - Note that it is very likely that training job is stopped in the middle and resume, therefore we need to continously project the eval metrics in the same digram, this is supported as well, expect to see following metrics diagram, taking bleu metrics as an example:
 
 <img width="430" alt="image" src="https://github.com/user-attachments/assets/ac8c36bc-938c-49ef-b011-977caee0b79c">
 
-#### Test the model
-- go to ./src/controlllm/inference/chat_completion.py, set vllm_model_path to the model checkpoint directory, for smaller model such as 8b, single GPU is enough, go to ./.vscode/launch.json, set nproc_per_node==1.
+### Test the model
+- go to /home/jobuser/controlllm/inference/chat_completion.py, set vllm_model_path to the model checkpoint directory, for smaller model such as 8b, single GPU is enough, go to ./.vscode/launch.json, set nproc_per_node==1.
 
 ```bash
         use_vllm: bool = True,  # Use vllm instead of native transformers
-        vllm_model_path: str = "/shared/models/<converted-checkpoint-folder>",  # Model path for vllm
-        ori_hf_model_path_or_name: str = "/shared/models/Meta-Llama-3-8B",  # Original HF model path or name
+        vllm_model_path: str = "/shared/models/<converted-checkpoint-folder>",  # Model path for vllm, nfs folder
+        ori_hf_model_path_or_name: str = "/shared/models/Meta-Llama-3-8B",  # Original HF model path or name, , nfs folder
 ```
 
 - Note that ori_hf_model_path_or_name is directory where the original model folder downloaded from huggingface. This is needed when we have customized the model architecture, but if there is no change in model architecture, it is fine to keep it the same as vllm_model_path.
 
-- Note that if the checkpoint directory is a saved checkpoint of sharded parameter(e.g. sharded parameter of FSDP), the checkpoint has to be converted to huggingface format. A converter is designed for that, go to ./src/controlllm/utils/checkpoint_converter.py and execute it by single thread(go to ./.vscode/launch.json and set "--nproc_per_node=1")
+- Note that if the checkpoint directory is a saved checkpoint of sharded parameter(e.g. sharded parameter of FSDP), the checkpoint has to be converted to huggingface format. A converter is designed for that, go to /home/jobuser/controlllm/utils/checkpoint_converter.py and execute it by single thread(go to ./.vscode/launch.json and set "--nproc_per_node=1")
 
 ```bash
     parser.add_argument("--fsdp_checkpoint_path", type=str, default="", help="Path to FSDP Sharded model checkpoints")
