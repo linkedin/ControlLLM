@@ -127,7 +127,7 @@ mkdir /home/jobuser/resources/
 
 - Move script to the folder, e.g. /home/jobuser:
 ```bash
-cp -r ControlLLM/src/controlllm /home/jobuser/
+cp -r ControlLLM/src/* /home/jobuser/
 cp -r ControlLLM/lm-evaluation-harness /home/jobuser/resources/
 cp ControlLLM/wheels/* /home/jobuser/resources/
 ```
