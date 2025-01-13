@@ -53,7 +53,7 @@ class InferenceEngine:
     def __init__(
         self,
         max_new_tokens: int = 800,  # The maximum numbers of tokens to generate
-        prompt_file: str = "./mock_data/chats.json",
+        prompt_file: str = "/home/jobuser/controlllm/inference/mock_data/chats.json",
         do_sample: bool = True,  # Whether to use sampling; use greedy decoding otherwise.
         use_cache: bool = True,  # Whether the model should use the past last key/values attentions to speed up decoding.
         top_p: float = 1.0,  # If set to float < 1, only the most probable tokens with probabilities adding up to top_p or higher are kept.
