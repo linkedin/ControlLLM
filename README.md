@@ -53,6 +53,7 @@ This repository provides tools to fine-tune LLMs using Control LLM with both pre
 
 - **Flexible Training Options**:
   - Two alternative trainers: native PyTorch trainer and HuggingFace Transformers trainer.
+  - Ease of debugging the code of distributed training for both trainers.
 
 - **Streamlined Configuration**:
   - Default setup for training, dataset, and model-loading configurations.
@@ -71,6 +72,7 @@ This repository provides tools to fine-tune LLMs using Control LLM with both pre
 
 - **Model Testing and Probing**:
   - Tools for systematic evaluation of model performance and behavior.
+  - Tools for probing the model with hidden state projection, attention map, interporation factor etc.
 
 - **Benchmarking Support**:
   - Benchmarking capabilities for most open LLM benchmark tasks.
