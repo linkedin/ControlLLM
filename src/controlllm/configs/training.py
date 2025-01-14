@@ -80,7 +80,7 @@ class TrainConfigCommon:
     eval_in_memory: bool = False  # evaluate in memory, set to True to reduce I/O and avoid torch.distributed.barrier(), however, it is accurate only for addictive metrics
     # stop by max_eval_step for eval, set to 0 or negative to disable it
     max_eval_step: int = 500
-    hf_hub_metrics_cache_dir: str = "/shared/public/data/controlllm/metrics/"  # cache for huggingface metrics
+    hf_hub_metrics_cache_dir: str = "/home/jobuser/metrics/"  # cache for huggingface metrics
 
     # observe your initial training steps e.g. loss and make adjustments, 1e-4 can lead to nan loss
     learning_rate: float = 5e-5

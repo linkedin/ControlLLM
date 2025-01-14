@@ -22,8 +22,9 @@ import numpy  # Here to have a nice missing dependency error message early on
 import six  # Here to have a nice missing dependency error message early on
 import psutil
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from itertools import islice
 from rouge_score import rouge_scorer, scoring
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import evaluate
 
@@ -130,6 +131,11 @@ class Rouge(evaluate.Metric):
         )
 
     def _compute(self, predictions, references, rouge_types=None, use_aggregator=True, use_stemmer=False, tokenizer=None):
+
+        if not references or not predictions:
+            print("No data to process.")
+            return
+
         if rouge_types is None:
             rouge_types = ["rouge1", "rouge2", "rougeL", "rougeLsum"]
 
@@ -149,17 +155,44 @@ class Rouge(evaluate.Metric):
 
         if len(references) > 16 * 10 and cpu_load < 50:  # in distributed training, this might create excessive subprocesses so restrict it
             num_processes = 16  # Adjust based on the number of CPU cores available
+
+            def batched(iterable, n):
+                """
+                Yield successive n-sized chunks from an iterable.
+                """
+                it = iter(iterable)
+                while batch := list(islice(it, n)):
+                    yield batch
+
+            batch_size = 5000  # Number of tasks to process in each batch
+
+            # Calculate total number of batches
+            total_batches = (len(references) + batch_size - 1) // batch_size
+
             with ProcessPoolExecutor(max_workers=num_processes) as executor:
                 # Use partial to include extra arguments
                 process_pair_with_args = partial(process_pair, scorer, multi_ref)
-                future_to_pair = {executor.submit(process_pair_with_args, ref, pred): (ref, pred) for ref, pred in zip(references, predictions)}
 
-                for future in tqdm(as_completed(future_to_pair), total=len(references), desc="Calculating ROUGE (Multi-Thread)"):
-                    score = future.result()
-                    if use_aggregator:
-                        aggregator.add_scores(score)
-                    else:
-                        scores.append(score)
+                for ref_batch, pred_batch in tqdm(
+                    zip(batched(references, batch_size), batched(predictions, batch_size)),
+                    total=total_batches,
+                    desc=f"Processing Batches of every {batch_size} data points",
+                ):
+                    future_to_pair = {executor.submit(process_pair_with_args, ref, pred): (ref, pred) for ref, pred in zip(ref_batch, pred_batch)}
+
+                    for future in tqdm(as_completed(future_to_pair), total=len(future_to_pair), desc="Calculating ROUGE in batch (Multi-Thread)",
+                                       leave=False,  # Prevents creating a new progress bar for each batch
+                                       ):
+                        try:
+                            score = future.result(timeout=60)
+                            if use_aggregator:
+                                aggregator.add_scores(score)
+                            else:
+                                scores.append(score)
+                        except Exception as e:
+                            # Handle the timeout case for a specific task
+                            print(f"Error processing pair: {future_to_pair[future]}: {e}")
+                            continue  # Skip this task and move on to the next
         else:
             for ref, pred in tqdm(zip(references, predictions), total=len(references), desc="Calculating ROUGE (Single Thread)"):
                 if multi_ref:

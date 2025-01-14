@@ -362,7 +362,7 @@ go to /home/jobuser/controlllm/configs/training.py, set either flop_counter to T
 
 ```bash
 # single GPU:
-MODEL_PATH=<model_checkpoint> python python /home/jobuser//controlllm/inference/batch_eval.py
+MODEL_PATH=<model_checkpoint> python python /home/jobuser/controlllm/inference/batch_eval.py
 
 # multiple GPUs:
 MODEL_PATH=<model_checkpoint> accelerate launch accelerate launch /home/jobuser/controlllm/inference/batch_eval.py
@@ -383,7 +383,7 @@ tmux attach -t session_name
     eval_steps: int = 1000
     # stop by max_eval_step for eval, set to 0 or negative to disable it
     max_eval_step: int = 20
-    hf_hub_metrics_cache_dir: str = "/shared/metrics/"  # nfs folder to cache for huggingface metrics, it also caches the code of the metrics calculation which can be customized via remote code
+    hf_hub_metrics_cache_dir: str = "/home/jobuser/metrics/"  # nfs folder to cache for huggingface metrics, it also caches the code of the metrics calculation which can be customized via remote code
 ...
 
 # expect this in the training log and all metrics in tensorboard
