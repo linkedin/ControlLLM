@@ -227,7 +227,7 @@ torchrun --nnodes=$NUM_NODES --nproc-per-node=$LOCAL_WORLD_SIZE \
 
 ##### Step 2: set up the right config with best practice:
 
-Note: in order to speed up training, there are 3 different combinations of configurations recommended to set before launching the training with "mldev run"(trainer config is in step 2):
+Note: in order to speed up training, there are 3 different combinations of configurations recommended to set before launching the training(trainer config is in step 1):
 
 - native trainer with fsdp
 
@@ -276,7 +276,7 @@ go to /home/jobuser/controlllm/config/training.py -> TrainConfigTransformers, se
     # fsdp_config: str = "/home/jobuser/controlllm/configs/fsdp.json"
 ```
 
-Note: for multi-node training, double check three configs for number of nodes and make sure they are consistent before "mldev run", here is an example for training with 4 nodes.
+Note: for multi-node training, double check three configs for number of nodes and make sure they are consistent with step 1, here is an example for training with 4 nodes.
 
 - go to /home/jobuser/controlllm/configs/fsdp.py, double check "replica_group_size"
 ```bash

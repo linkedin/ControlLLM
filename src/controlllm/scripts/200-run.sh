@@ -1,8 +1,5 @@
 #!/bin/sh
 export PATH=$HOME/.local/bin:$PATH
-# source scl_source enable devtoolset-11
-# source mldev-scripts/setup_mlflow_hf.sh
-# dragon knight
 
 export GPUS_PER_NODE=$(nvidia-smi --list-gpus|wc -l)
 export LOCAL_WORLD_SIZE=$GPUS_PER_NODE
