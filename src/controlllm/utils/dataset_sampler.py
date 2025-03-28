@@ -191,8 +191,19 @@ class LengthBasedBatchSampler(BatchSampler):
             self.lengths = dataset.lengths
         elif dataset and isinstance(next(iter(dataset)), dict):
             logging.info(msg_long_running_process)
-            first_key = next(iter(next(iter(dataset)).keys()))
-            self.lengths = [len(d[first_key]) for d in tqdm(dataset, desc="Computing data lengths")]
+            batch = next(iter(dataset))
+            input_ids_keys = [key for key in batch.keys() if "input_ids" in key]
+
+            if not input_ids_keys:
+                raise ValueError("No 'input_ids' keys found in the dataset batch.")
+
+            total_lengths = [0] * len(batch[input_ids_keys[0]])
+
+            for key in input_ids_keys:
+                lengths = [len(d[key]) for d in tqdm(dataset, desc=f"Computing data lengths of {key}")]
+                total_lengths = [sum(x) for x in zip(total_lengths, lengths)]
+
+            self.lengths = total_lengths
         else:
             logging.info(msg_long_running_process)
             self.lengths = [len(d) for d in tqdm(dataset, desc="Computing data lengths")]

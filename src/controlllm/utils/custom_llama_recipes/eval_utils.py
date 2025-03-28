@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed according to the terms of the Llama 2 Community License Agreement.
-
+from __future__ import annotations
 import os
 import json
 import logging
@@ -116,6 +116,11 @@ def compute(metrics_module: EvaluationModule, *, predictions=None, references=No
         - Dictionary with the results if this evaluation module is run on the main process (``process_id == 0``).
         - None if the evaluation module is not run on the main process (``process_id != 0``).
     """
+    threshold = kwargs.pop("threshold", None)
+    # Create binary labels: 1 if groundtruth score >= threshold, else 0.
+    if references:
+        references = [1 if r >= threshold else 0 for r in references]
+
     all_kwargs = {"predictions": predictions, "references": references, **kwargs}
     if predictions is None and references is None:
         missing_kwargs = {k: None for k in metrics_module._feature_names() if k not in all_kwargs}
@@ -150,7 +155,24 @@ def compute(metrics_module: EvaluationModule, *, predictions=None, references=No
         inputs = {input_name: metrics_module.data[input_name] for input_name in metrics_module._feature_names()}
         with temp_seed(metrics_module.seed):
             logging.info(f"Computing metrics - {metrics_module.experiment_id} with {len(inputs[list(inputs.keys())[0]])} data points, this may take a while ...")
+
+            # Create binary labels: 1 if groundtruth score >= threshold, else 0.
+            if threshold is not None and "references" in inputs:
+                logging.info(f"Creating binary labels with threshold {threshold}")
+                references = inputs["references"]
+                inputs["references"] = [1 if r >= threshold else 0 for r in references]
+                # Only one class present in y_true. ROC AUC score is not defined in that case. So if all are 0 or 1, we flip the labels of first element of y_true
+                if len(set(inputs["references"])) == 1:
+                    inputs["references"][0] = 1 - inputs["references"][0]
+
             output = metrics_module._compute(**inputs, **compute_kwargs)
+
+            # Don't delete the metrics_module.data and writer yet
+            if threshold is not None and "references" in inputs:
+                logging.info(f"output before restoring the original references: {output}")
+                inputs["references"] = references  # restore the original references for next threshold
+                if threshold != -1:  # -1 is used to delete data and writer(cross reference to code line 608)
+                    return output
 
         if metrics_module.buf_writer is not None:
             metrics_module.buf_writer = None
@@ -165,7 +187,8 @@ def compute(metrics_module: EvaluationModule, *, predictions=None, references=No
                 del metrics_module.writer
                 metrics_module.writer = None
                 os.remove(file_path)
-                filelock.release()
+                if filelock:
+                    filelock.release()
 
         return output
     else:
@@ -203,11 +226,9 @@ def evaluate(model, train_config, eval_dataloader, local_rank, rank, tokenizer, 
     # Initialize metrics
     if metrics_modules is None:
         metrics_modules = initialize_metrics_modules(train_config, rank, world_size)
-    rouge, bleu = metrics_modules["rouge"], metrics_modules["bleu"]
-    if train_config.eval_in_memory:
-        # Prepare lists for predictions and references
-        all_preds = []
-        all_labels = []
+    # Prepare lists for predictions and references when train_config.eval_in_memory is True
+    all_preds = []
+    all_labels = []
 
     eval_step_loss = []
     eval_step_perplexity = []
@@ -228,6 +249,10 @@ def evaluate(model, train_config, eval_dataloader, local_rank, rank, tokenizer, 
             # Create a new dictionary to store tensors moved to the appropriate device. This is necessary to avoid additional GPU memory usage if we move batch to GPU in place.
             device_batch = {}
             for key, value in batch.items():
+                # skip is value is not a tensor
+                if not isinstance(value, torch.Tensor):
+                    continue
+
                 if enable_fsdp:
                     device_batch[key] = value.to(local_rank)  # Move to the specified device based on local rank
                 else:
@@ -239,7 +264,7 @@ def evaluate(model, train_config, eval_dataloader, local_rank, rank, tokenizer, 
             # Ensure no gradients are computed for this scope to save memory
             with torch.no_grad():
                 # Forward pass and compute loss
-                outputs = model(**device_batch)
+                outputs = model(**device_batch, return_verbose=True)
                 cross_entropy_loss = outputs.loss
                 additional_loss = ModelExpander.get_additional_loss(model, cross_entropy_loss)
                 loss = cross_entropy_loss + additional_loss
@@ -251,37 +276,16 @@ def evaluate(model, train_config, eval_dataloader, local_rank, rank, tokenizer, 
                 ts_eval_loss += loss.detach().float()
                 ts_eval_ce_loss += cross_entropy_loss.detach().float()
                 ts_eval_div_loss += additional_loss.detach().float()
-            # Decode predictions and add to evaluation predictions list
-            preds = torch.argmax(outputs.logits, -1)
-            # prints the first five decoded predictions and corresponding ground truth labels for comparison
-            # Replace same place in preds_np of labels_np[labels_np == -100] with 0, note that labels -100 means prompt tokens
-            preds_np, labels_np = preds.detach().cpu().numpy(), batch["labels"].cpu().numpy()
-            mask = np.roll(labels_np == -100, shift=-1)
-            mask[:, -1] = False  # Ensure the last element is False after rolling
-            preds_np[mask] = tokenizer.pad_token_id
-            # Replace -100 labels with pad_token_id which is a special token for padding
-            labels_np[labels_np == -100] = tokenizer.pad_token_id
-            # zip the predictions(preds_np) and labels(labels_np) together and print them to compare
-            for i in range(len(preds_np)):
-                if i < 1 or train_config.debug:
-                    logging.info(f"Predicted output: {tokenizer.decode(preds_np[i], skip_special_tokens=True)}")
-                    logging.info(f"Groundtruth: {tokenizer.decode(labels_np[i], skip_special_tokens=True)}")
 
-            batch_decoded_preds = [tokenizer.decode(pred_np, skip_special_tokens=True) for pred_np in preds_np]
-            batch_decoded_labels = [tokenizer.decode(label_np, skip_special_tokens=True) for label_np in labels_np]
-
-            if not train_config.eval_in_memory:
-                for metrics_module in metrics_modules.values():
-                    metrics_module.add_batch(predictions=batch_decoded_preds, references=batch_decoded_labels)
+            if hasattr(outputs, "logits"):
+                log_causallm_samples(outputs, batch, tokenizer, train_config, metrics_modules, all_preds, all_labels)
+            elif any("similarities" in attr for attr in dir(outputs)):
+                log_samples_sentence_transformer(outputs, batch, tokenizer, train_config, metrics_modules, all_preds, all_labels)
             else:
-                # there is a unsolved issue running it in distributed multi-node shared file system, TODO: remove this when the issue is resolved
-                # https://github.com/huggingface/evaluate/issues/481
-                # temp workaround, simply sum up individual BLEU scores from subsets of data and then average them which is NOT accurate
-                all_preds.extend(batch_decoded_preds)
-                all_labels.extend(batch_decoded_labels)
+                logging.warning("No logits or similarities attributes found in the model outputs. Skipping evaluation.")
 
             # Clean up to release GPU memory
-            del outputs, cross_entropy_loss, additional_loss, loss, preds, device_batch
+            del outputs, cross_entropy_loss, additional_loss, loss, device_batch
             torch.cuda.empty_cache()
 
         if (not enable_fsdp or local_rank == 0) and memtrace:
@@ -326,6 +330,102 @@ def evaluate(model, train_config, eval_dataloader, local_rank, rank, tokenizer, 
     del ts_eval_loss, ts_eval_ce_loss, ts_eval_div_loss, ts_eval_ppl, ts_interp_factors
 
     # Compute ROUGE and BLEU scores
+    eval_metrics = train_config.eval_metrics if train_config.eval_metrics else ["rouge", "sacrebleu"]
+    if "rouge" in eval_metrics or "sacrebleu" in eval_metrics:
+        causallm_metrics = compute_causallm_metrics(metrics_modules, all_preds, all_labels, ts_device, ts_dtype, world_size, enable_fsdp, train_config)
+    else:
+        causallm_metrics = {k: float('inf') for k in ['rouge1', 'rouge2', 'rougeL', 'rougeLsum', 'bleu']}
+
+    # Compute ROC-AUC and PR-AUC scores
+    thresholds = [1, 2, 3, 4]
+    if "roc_auc" in eval_metrics or "pr_auc" in eval_metrics:
+        sentence_transformer_metrics = compute_sentence_transformer_metrics(metrics_modules, all_preds, all_labels, ts_device, ts_dtype, world_size, enable_fsdp, train_config, thresholds=thresholds)
+    else:
+        auc_results = {k: float('inf') for k in thresholds}
+        sentence_transformer_metrics = {"roc_auc": auc_results, "pr_auc": auc_results}
+    # Calculate avg_roc_auc, ignoring 'inf' values
+    valid_metrics = [v for v in sentence_transformer_metrics["roc_auc"].values() if v != float('inf')]
+    avg_roc_auc = sum(valid_metrics) / len(valid_metrics) if valid_metrics else float('inf')
+    # Calculate avg_pr_auc, ignoring 'inf' values
+    valid_metrics = [v for v in sentence_transformer_metrics["pr_auc"].values() if v != float('inf')]
+    avg_pr_auc = sum(valid_metrics) / len(valid_metrics) if valid_metrics else float('inf')
+
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()  # This can help release unoccupied memory back to the GPU
+
+    # Print evaluation loss and metrics
+    causallm_metrics_log = ' '.join([f"{key}={value}" for key, value in causallm_metrics.items()])
+    sentence_transformer_metrics_log = ' '.join([f"{outer_key}.{inner_key}={value}" for outer_key, module in sentence_transformer_metrics.items() for inner_key, value in module.items()])
+    logging.info(f"{global_step=} {eval_ppl=} {eval_loss=} {causallm_metrics_log}, {sentence_transformer_metrics_log}, {avg_roc_auc=}, {avg_pr_auc=}")
+
+    if wandb_run:
+        wandb_run.log({
+                        'eval/perplexity': eval_ppl,
+                        'eval/loss': eval_loss,
+                        'eval/ce_loss': eval_ce_loss,
+                        'eval/div_loss': eval_div_loss,
+                        **{f'eval/interp_factors/{k}': v for k, v in interp_factors.items()},
+                        **{f'eval/avg_interp_weight/{k}': v for k, v in avg_interp_weights.items()},
+                        **{f'eval/{k}': v for k, v in causallm_metrics.items()},
+                        **{f'eval/roc_auc/threshold_{k}': v for k, v in sentence_transformer_metrics["roc_auc"].items()},
+                        **{f'eval/pr_auc/threshold_{k}': v for k, v in sentence_transformer_metrics["pr_auc"].items()},
+                        'eval/roc_auc/avg': avg_roc_auc,
+                        'eval/pr_auc/avg': avg_pr_auc,
+                        'eval/global_step': global_step
+                    }, commit=False)
+
+    # Makes sure that only rank 0 writes to tensorboard
+    if tb_writer:
+        tb_writer.add_scalar("EvalPerplexity/GlobalStep", eval_ppl, global_step)
+        tb_writer.add_scalar("EvalLoss/GlobalStep", eval_loss, global_step)
+        tb_writer.add_scalar("EvalCrossEntropyLoss/GlobalStep", eval_ce_loss, global_step)
+        tb_writer.add_scalar("EvalDivergenceLoss/GlobalStep", eval_div_loss, global_step)
+        tb_writer.add_scalars("EvalInterpFactors", interp_factors, global_step)
+        if avg_interp_weights:
+            tb_writer.add_scalars("EvalAvgInterpWeight", avg_interp_weights, global_step)
+        if "rouge" in eval_metrics:
+            tb_writer.add_scalars("EvalRouge", {
+                "Rouge1": causallm_metrics['rouge1'],
+                "Rouge2": causallm_metrics['rouge2'],
+                "RougeL": causallm_metrics['rougeL'],
+                "RougeLsum": causallm_metrics['rougeLsum']
+            }, global_step)
+        if "sacrebleu" in eval_metrics:
+            tb_writer.add_scalar("EvalBleu/GlobalStep", causallm_metrics['bleu'], global_step)
+        if "roc_auc" in eval_metrics:
+            tb_writer.add_scalars("EvalRocAuc", {f"Threshold_{k}": v for k, v in sentence_transformer_metrics["roc_auc"].items()}, global_step)
+            tb_writer.add_scalar("EvalRocAuc/Avg", avg_roc_auc, global_step)
+        if "pr_auc" in eval_metrics:
+            tb_writer.add_scalars("EvalPrAuc", {f"Threshold_{k}": v for k, v in sentence_transformer_metrics["pr_auc"].items()}, global_step)
+            tb_writer.add_scalar("EvalPrAuc/Avg", avg_pr_auc, global_step)
+
+    results = {
+        "eval_ppl": eval_ppl,
+        "eval_loss": eval_loss,
+        "eval_bleu": causallm_metrics['bleu'],
+        "eval_rougeLsum": causallm_metrics['rougeLsum'],
+        "eval_step_loss": eval_step_loss,
+        "eval_step_perplexity": eval_step_perplexity,
+        "eval_avg_interp_weights": avg_interp_weights,
+        "global_step": global_step
+    }
+    results.update({f"eval_roc_acu_threshold_{k}": v for k, v in sentence_transformer_metrics["roc_auc"].items()})
+    results.update({f"eval_pr_acu_threshold_{k}": v for k, v in sentence_transformer_metrics["pr_auc"].items()})
+    save_eval_result(results, train_config, global_step, rank)
+
+    # Ensure the model is switched back to training mode
+    model.train()
+
+    return eval_ppl, eval_loss, causallm_metrics['bleu'], causallm_metrics['rougeLsum'], eval_step_loss, eval_step_perplexity, avg_roc_auc, avg_pr_auc
+
+
+def compute_causallm_metrics(metrics_modules, all_preds, all_labels, ts_device, ts_dtype, world_size, enable_fsdp, train_config):
+    """
+    Compute the BLEU and ROUGE metrics for causal language model
+    """
+    # Compute ROUGE and BLEU scores
+    rouge, bleu = metrics_modules["rouge"], metrics_modules["bleu"]
     if not train_config.eval_in_memory:
         # Compute ROUGE and BLEU scores, return none for ranks other than 0, note that metrics_modules handles the distributed computation of metrics
         logging.info(f"Computing ROUGE and BLEU scores for all ranks, this may take a while ...")
@@ -375,52 +475,183 @@ def evaluate(model, train_config, eval_dataloader, local_rank, rank, tokenizer, 
         # Clean up to release GPU memory
         del ts_eval_metrics
 
-    import gc
-    gc.collect()
-    torch.cuda.empty_cache()  # This can help release unoccupied memory back to the GPU
+    return {'rouge1': eval_rouge1, 'rouge2': eval_rouge2, 'rougeL': eval_rougeL, 'rougeLsum': eval_rougeLsum, 'bleu': eval_bleu}
 
-    # Print evaluation loss and metrics
-    logging.info(f"{global_step=} {eval_ppl=} {eval_loss=} {eval_rouge1=} {eval_rouge2=} {eval_rougeL=} {eval_rougeLsum=} {eval_bleu=}")
 
-    if wandb_run:
-        wandb_run.log({
-                        'eval/perplexity': eval_ppl,
-                        'eval/loss': eval_loss,
-                        'eval/ce_loss': eval_ce_loss,
-                        'eval/div_loss': eval_div_loss,
-                        **{f'eval/interp_factors/{k}': v for k, v in interp_factors.items()},
-                        **{f'eval/avg_interp_weight/{k}': v for k, v in avg_interp_weights.items()},
-                        'eval/rouge1': eval_rouge1,
-                        'eval/rouge2': eval_rouge2,
-                        'eval/rougeL': eval_rougeL,
-                        "eval/rougeLsum": eval_rougeLsum,
-                        'eval/bleu': eval_bleu,
-                        'eval/global_step': global_step
-                    }, commit=False)
+def log_causallm_samples(outputs, batch, tokenizer, train_config, metrics_modules, all_preds, all_labels):
+    """
+    Log the predicted tokens for causal language model
 
-    # Makes sure that only rank 0 writes to tensorboard
-    if tb_writer:
-        tb_writer.add_scalar("EvalPerplexity/GlobalStep", eval_ppl, global_step)
-        tb_writer.add_scalar("EvalLoss/GlobalStep", eval_loss, global_step)
-        tb_writer.add_scalar("EvalCrossEntropyLoss/GlobalStep", eval_ce_loss, global_step)
-        tb_writer.add_scalar("EvalDivergenceLoss/GlobalStep", eval_div_loss, global_step)
-        tb_writer.add_scalars("EvalInterpFactors", interp_factors, global_step)
-        if avg_interp_weights:
-            tb_writer.add_scalars("EvalAvgInterpWeight", avg_interp_weights, global_step)
-        tb_writer.add_scalars("EvalRouge", {
-            "Rouge1": eval_rouge1,
-            "Rouge2": eval_rouge2,
-            "RougeL": eval_rougeL,
-            "RougeLsum": eval_rougeLsum
-        }, global_step)
-        tb_writer.add_scalar("EvalBleu/GlobalStep", eval_bleu, global_step)
+    Parameters:
+        outputs: model output with logits
+        batch: input batch containing tokenized inputs and groundtruth labels
+        tokenizer: the tokenizer for decoding the input ids
+        train_config: configuration object; used here to check if debug logging is enabled
+        metrics_modules: dictionary containing the evaluation modules
+        all_preds: list to which the decoded predictions will be appended
+        all_labels: list to which the decoded groundtruth labels will be
+    """
+    # Decode predictions and add to evaluation predictions list
+    preds = torch.argmax(outputs.logits, -1)
+    # prints the first five decoded predictions and corresponding ground truth labels for comparison
+    # Replace same place in preds_np of labels_np[labels_np == -100] with 0, note that labels -100 means prompt tokens
+    preds_np, labels_np = preds.detach().cpu().numpy(), batch["labels"].cpu().numpy()
+    mask = np.roll(labels_np == -100, shift=-1)
+    mask[:, -1] = False  # Ensure the last element is False after rolling
+    preds_np[mask] = tokenizer.pad_token_id
+    # Replace -100 labels with pad_token_id which is a special token for padding
+    labels_np[labels_np == -100] = tokenizer.pad_token_id
+    # zip the predictions(preds_np) and labels(labels_np) together and print them to compare
+    for i in range(len(preds_np)):
+        if i < 1 or train_config.debug:
+            logging.info(f"Predicted output: {tokenizer.decode(preds_np[i], skip_special_tokens=True)}")
+            logging.info(f"Groundtruth: {tokenizer.decode(labels_np[i], skip_special_tokens=True)}")
 
-    save_eval_result(eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, eval_step_loss, eval_step_perplexity, train_config, global_step, rank, avg_interp_weights)
+    batch_decoded_preds = [tokenizer.decode(pred_np, skip_special_tokens=True) for pred_np in preds_np]
+    batch_decoded_labels = [tokenizer.decode(label_np, skip_special_tokens=True) for label_np in labels_np]
 
-    # Ensure the model is switched back to training mode
-    model.train()
+    if not train_config.eval_in_memory:
+        for metrics_module in metrics_modules.values():
+            metrics_module.add_batch(predictions=batch_decoded_preds, references=batch_decoded_labels)
+    else:
+        # there is a unsolved issue running it in distributed multi-node shared file system, TODO: remove this when the issue is resolved
+        # https://github.com/huggingface/evaluate/issues/481
+        # temp workaround, simply sum up individual BLEU scores from subsets of data and then average them which is NOT accurate
+        all_preds.extend(batch_decoded_preds)
+        all_labels.extend(batch_decoded_labels)
 
-    return eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, eval_step_loss, eval_step_perplexity
+
+def log_samples_sentence_transformer(outputs, batch, tokenizer, train_config, metrics_modules, all_preds, all_labels):
+    """
+    Log the predicted similarity scores for a SentenceTransformer model and accumulate
+    the ground truth scores (references) and predicted similarity scores for ROC-AUC computation.
+    
+    Parameters:
+        outputs: model output with various similarity scores (e.g. similarity, similarity_chosen, etc.)
+        batch: input batch containing tokenized inputs and groundtruth scores (e.g. "score", "score_chosen")
+        tokenizer: the tokenizer for decoding the input ids
+        train_config: configuration object; used here to check if debug logging is enabled
+        metrics_modules: dictionary containing the evaluation modules
+        all_labels: list to which the groundtruth scores will be appended
+        all_preds: list to which the predicted similarity scores will be appended
+    """
+    # Loop over each attribute in outputs that contains "similarity"
+    for similarity_key, similarity_val in outputs.similarities.items():
+        if similarity_val is None:
+            continue
+
+        # Determine which keys to use from the batch based on the attribute name.
+        if "chosen" in similarity_key:
+            input_key = "chosen_input_ids"
+            score_key = "score_chosen"
+        elif "rejected" in similarity_key:
+            input_key = "rejected_input_ids"
+            score_key = "score_reject"
+        else:
+            # Note that this is to log data input for cosent margin loss, refer to ./utils/custom_sentence_transformers/cosent_margin_loss.py
+            # Rigourously input_key named as "chosen_input_ids" is not accurate, it should be "input_ids" as it needs just query and single doc compared to ./utils/custom_sentence_transformers/pairwise_cosine_loss.py
+            # Keep it as "chosen_input_ids" to make it compatible to pairwise_cosine_loss. Refer to data preprocessing in ./utils/data/semantic_search_cosent_dataset.py
+            input_key = "chosen_input_ids"
+            score_key = "label"
+
+        # Loop over the batch samples
+        for i in range(similarity_val.shape[0]):
+            # Optionally log detailed sample information
+            if i < 1 or train_config.debug:
+                decoded_prompt = tokenizer.decode(batch["prompt_input_ids"][i], skip_special_tokens=True)
+                decoded_doc = tokenizer.decode(batch[input_key][i], skip_special_tokens=True)
+                # Use .item() to extract a Python number from tensor/numpy scalar
+                pred_score = similarity_val[i].item()
+                true_score = batch[score_key][i].item()
+                logging.info(f"Predicted {similarity_key}: {pred_score}. Groundtruth {score_key}: {true_score}. "
+                             f"Decoded prompt: {decoded_prompt}. Decoded {input_key}: {decoded_doc}")
+
+        if not train_config.eval_in_memory:
+            for metrics_module in metrics_modules.values():
+                metrics_module.add_batch(predictions=similarity_val, references=batch[score_key])
+        else:
+            # there is a unsolved issue running it in distributed multi-node shared file system, TODO: remove this when the issue is resolved
+            # https://github.com/huggingface/evaluate/issues/481
+            # Accumulate groundtruth and prediction for later ROC-AUC computation.
+            all_labels.extend(batch[score_key])
+            all_preds.extend(similarity_val)
+
+
+def compute_sentence_transformer_metrics(metrics_modules, all_preds, all_labels, ts_device, ts_dtype, world_size, enable_fsdp, train_config, thresholds=[1, 2, 3, 4]):
+    """
+    Compute ROC-AUC for various binary splits by thresholding the groundtruth scores.
+
+    For each threshold, samples with a groundtruth score >= threshold are labeled as 1, and 0 otherwise.
+
+    Parameters:
+        all_labels: list of accumulated groundtruth relevance scores
+        all_preds: list of accumulated predicted similarity scores
+        metrics_modules: dictionary containing metric modules (including "roc_auc")
+        ts_device: torch device to create evaluation tensors on
+        ts_dtype: torch dtype to ensure consistency across metrics
+        world_size: number of distributed processes
+        enable_fsdp: flag indicating if Fully Sharded Data Parallel is enabled
+        train_config: training configuration object (with attribute eval_in_memory)
+        thresholds: list of thresholds to compute binary splits
+
+    Returns:
+        For eval_in_memory=True: dictionary mapping each threshold to its computed ROC-AUC score.
+        For eval_in_memory=False: metrics are computed (and reduced) internally (no return value).
+    """
+    roc_auc, pr_auc = metrics_modules["roc_auc"], metrics_modules["pr_auc"]
+    roc_auc_results, pr_auc_results = {}, {}
+    if not train_config.eval_in_memory:
+        # Distributed computation: assume the metric module already has accumulated
+        # predictions and references, so we simply call compute without extra inputs.
+        logging.info("Computing ROC-AUC scores for all ranks, this may take a while ...")
+        for thresh in thresholds:
+            # Note: In non in-memory mode, the module is expected to have already aggregated
+            # the predictions/references across devices; thus, we do not pass them here.
+            # ROC-AUC
+            results_roc_auc = roc_auc.compute(threshold=thresh)
+            # If results exist, extract roc_auc; otherwise, assign infinity.
+            roc_auc_results[thresh] = round(results_roc_auc['roc_auc'], 2) if results_roc_auc else float('inf')
+            # PR-AUC
+            results_pr_auc = pr_auc.compute(threshold=thresh)
+            # If results exist, extract pr_auc; otherwise, assign infinity.
+            pr_auc_results[thresh] = round(results_pr_auc['pr_auc'], 2) if results_pr_auc else float('inf')
+        # after all thresholds are computed, delete the data in the metrics module and release the lock, this is done via not passing threshold with -1(refer to code line 170)
+        _, _ = roc_auc.compute(threshold=-1), pr_auc.compute(threshold=-1)
+    else:
+        # In-memory computation: explicitly pass predictions and references.
+        logging.info(f"Computing ROC-AUC scores for {len(all_labels)} samples...")
+        for thresh in thresholds:
+            binary_refs = [1 if r >= thresh else 0 for r in all_labels]
+            # ROC-AUC
+            roc_auc_results = roc_auc.compute(predictions=all_preds, references=binary_refs)
+            roc_auc_results[thresh] = round(roc_auc_results['roc_auc'], 2)
+            # PR-AUC
+            pr_auc_results = pr_auc.compute(predictions=all_preds, references=binary_refs)
+            pr_auc_results[thresh] = round(pr_auc_results['pr_auc'], 2)
+
+        # Convert the computed scores into torch tensors for consistency.
+        # ROC-AUC
+        ts_roc_auc_metrics = {thresh: torch.tensor(roc_auc_results[thresh], device=ts_device, dtype=ts_dtype) for thresh in thresholds}
+        # PR-AUC
+        ts_pr_auc_metrics = {thresh: torch.tensor(pr_auc_results[thresh], device=ts_device, dtype=ts_dtype) for thresh in thresholds}
+        with torch.no_grad():
+            # If using FSDP across multiple devices, reduce the metrics.
+            if enable_fsdp and world_size > 1:
+                logging.info("Reducing evaluation ROC-AUC scores across all devices...")
+                torch.distributed.barrier()
+                for thresh in thresholds:
+                    dist.all_reduce(ts_roc_auc_metrics[thresh], op=dist.ReduceOp.SUM)
+                    dist.all_reduce(ts_pr_auc_metrics[thresh], op=dist.ReduceOp.SUM)
+                for thresh in thresholds:
+                    ts_roc_auc_metrics[thresh] /= world_size
+                    ts_pr_auc_metrics[thresh] /= world_size
+
+            # Extract the reduced values.
+            roc_auc_results = {thresh: ts_roc_auc_metrics[thresh].item() for thresh in thresholds}
+            pr_auc_results = {thresh: ts_pr_auc_metrics[thresh].item() for thresh in thresholds}
+        del ts_roc_auc_metrics, ts_pr_auc_metrics
+
+    return {"roc_auc": roc_auc_results, "pr_auc": pr_auc_results}
 
 
 def init_writer(metrics_module: EvaluationModule):
@@ -443,24 +674,14 @@ def init_writer(metrics_module: EvaluationModule):
     )
 
 
-def save_eval_result(eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, eval_step_loss, eval_step_perplexity, train_config, global_step, rank=0, avg_interp_weights=None):
+def save_eval_result(results, train_config, global_step, rank=0):
     if rank != 0:
         return
     # save all returned result as a json file in the output directory / resume_checkpoint_folder
-    result = {
-        "eval_ppl": eval_ppl,
-        "eval_loss": eval_loss,
-        "eval_bleu": eval_bleu,
-        "eval_rougeLsum": eval_rougeLsum,
-        "eval_step_loss": eval_step_loss,
-        "eval_step_perplexity": eval_step_perplexity,
-        "eval_avg_interp_weights": avg_interp_weights,
-        "global_step": global_step
-    }
     output_path = Path(train_config.output_dir) / "checkpoint-{}".format(global_step)
     if output_path.exists():
         with open(os.path.join(output_path, "evaluation_results.json"), "w") as f:
-            json.dump(result, f, indent=4)
+            json.dump(results, f, indent=4)
         logging.info(f"Saved evaluation results to {output_path}/evaluation_results.json")
     else:
         logging.warning(f"Checkpoint directory {output_path} does not exist, skipping saving evaluation results")
@@ -481,14 +702,32 @@ def initialize_metrics_modules(train_config, rank: int = 0, world_size=None) -> 
     # Initialize cache directory and script path
     cache_dir = str(Path(train_config.output_dir) / "evaluate")
     os.makedirs(cache_dir, exist_ok=True)
-    rough_script_path = str(Path(train_config.hf_hub_metrics_cache_dir) / "rouge/rouge.py")
-    sacrebleu_script_path = str(Path(train_config.hf_hub_metrics_cache_dir) / "sacrebleu/sacrebleu.py")
+    eval_metrics = train_config.eval_metrics if train_config.eval_metrics else ["rouge", "sacrebleu"]
+    if "rouge" in eval_metrics:
+        rough_script_path = str(Path(train_config.hf_hub_metrics_cache_dir) / "rouge/rouge.py")
+    if "sacrebleu" in eval_metrics:
+        sacrebleu_script_path = str(Path(train_config.hf_hub_metrics_cache_dir) / "sacrebleu/sacrebleu.py")
+    if "roc_auc" in eval_metrics:
+        roc_auc_script_path = str(Path(train_config.hf_hub_metrics_cache_dir) / "auc/roc_auc.py")
+    if "pr_auc" in eval_metrics:
+        pr_auc_script_path = str(Path(train_config.hf_hub_metrics_cache_dir) / "auc/pr_auc.py")
 
     # Initialize metrics modules
     if not train_config.eval_in_memory:  # distrbuted computation fails in multi-node training with nfs https://github.com/huggingface/evaluate/issues/481
-        rouge: EvaluationModule = load(path=rough_script_path, num_process=world_size, process_id=rank, cache_dir=cache_dir, experiment_id="rouge", timeout=1, trust_remote_code=True)
-        bleu: EvaluationModule = load(path=sacrebleu_script_path, num_process=world_size, process_id=rank, cache_dir=cache_dir, experiment_id="sacrebleu", timeout=1, trust_remote_code=True)
-        metrics_modules = {"rouge": rouge, "bleu": bleu}
+        metrics_modules = {}
+        if "rouge" in eval_metrics:
+            rouge: EvaluationModule = load(path=rough_script_path, num_process=world_size, process_id=rank, cache_dir=cache_dir, experiment_id="rouge", timeout=1, trust_remote_code=True)
+            metrics_modules["rouge"] = rouge
+        if "sacrebleu" in eval_metrics:
+            bleu: EvaluationModule = load(path=sacrebleu_script_path, num_process=world_size, process_id=rank, cache_dir=cache_dir, experiment_id="sacrebleu", timeout=1, trust_remote_code=True)
+            metrics_modules["bleu"] = bleu
+        if "roc_auc" in eval_metrics:
+            roc_auc: EvaluationModule = load(path=roc_auc_script_path, num_process=world_size, process_id=rank, cache_dir=cache_dir, experiment_id="roc_auc", timeout=1, trust_remote_code=True)
+            metrics_modules["roc_auc"] = roc_auc
+        if "pr_auc" in eval_metrics:
+            pr_auc: EvaluationModule = load(path=pr_auc_script_path, num_process=world_size, process_id=rank, cache_dir=cache_dir, experiment_id="pr_auc", timeout=1, trust_remote_code=True)
+            metrics_modules["pr_auc"] = pr_auc
+
         for metrics_module in metrics_modules.values():  # solve https://github.com/huggingface/evaluate/issues/481
             logging.info(f"{train_config.eval_in_memory=}: initializing distributed file writer for {metrics_module.experiment_id}")
             # customized code to avoid acquiring the file lock which is far less reliable in multi-node training than torch.distributed.barrier()
@@ -497,9 +736,18 @@ def initialize_metrics_modules(train_config, rank: int = 0, world_size=None) -> 
             metrics_module.compute = compute.__get__(metrics_module)
             init_writer(metrics_module)
     else:
-        rouge: EvaluationModule = load(path=rough_script_path, cache_dir=cache_dir, experiment_id=f"rouge-{world_size}-{rank}", keep_in_memory=True, trust_remote_code=True)
-        bleu: EvaluationModule = load(path=sacrebleu_script_path, cache_dir=cache_dir, experiment_id=f"sacrebleu-{world_size}-{rank}", keep_in_memory=True, trust_remote_code=True)
-        metrics_modules = {"rouge": rouge, "bleu": bleu}
+        if "rouge" in eval_metrics:
+            rouge: EvaluationModule = load(path=rough_script_path, cache_dir=cache_dir, experiment_id=f"rouge-{world_size}-{rank}", keep_in_memory=True, trust_remote_code=True)
+            metrics_modules["rouge"] = rouge
+        if "sacrebleu" in eval_metrics:
+            bleu: EvaluationModule = load(path=sacrebleu_script_path, cache_dir=cache_dir, experiment_id=f"sacrebleu-{world_size}-{rank}", keep_in_memory=True, trust_remote_code=True)
+            metrics_modules["bleu"] = bleu
+        if "roc_auc" in eval_metrics:
+            roc_auc: EvaluationModule = load(path=roc_auc_script_path, cache_dir=cache_dir, experiment_id=f"roc_auc-{world_size}-{rank}", keep_in_memory=True, trust_remote_code=True)
+            metrics_modules["roc_auc"] = roc_auc
+        if "pr_auc" in eval_metrics:
+            pr_auc: EvaluationModule = load(path=pr_auc_script_path, cache_dir=cache_dir, experiment_id=f"pr_auc-{world_size}-{rank}", keep_in_memory=True, trust_remote_code=True)
+            metrics_modules["pr_auc"] = pr_auc
 
     return metrics_modules
 

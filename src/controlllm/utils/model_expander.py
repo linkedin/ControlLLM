@@ -1,5 +1,7 @@
+'''note that we want to keep this python file independent from rest of framework such as loading_utils.py so the community can use it without the need of controlllm framework'''
 from functools import partial
 import yaml
+import shutil
 import inspect
 import logging
 from tqdm import tqdm
@@ -14,9 +16,12 @@ from torch.nn import ModuleList, Module, Linear, Sigmoid, Parameter
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 from dataclasses import asdict
-from transformers import AutoModelForCausalLM, AutoConfig
+from transformers import AutoModel, AutoConfig, GenerationConfig, AutoModelForCausalLM
 from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, CONFIG_MAPPING, PretrainedConfig, PreTrainedModel
 from vllm import ModelRegistry
+
+from controlllm.utils.custom_sentence_transformers import CustomSentenceTransformer as SentenceTransformer
+from sentence_transformers.util import is_sentence_transformer_model
 
 from controlllm.configs.loading import ModelLoadingConfig
 
@@ -52,14 +57,27 @@ class ModelExpander:
         print(f"Model expansion: Loading pretrained model configuration from {self.model_loading_config.pretrained_model_name_or_path}")
 
         self.config = AutoConfig.from_pretrained(self.model_loading_config.pretrained_model_name_or_path)
+        self.generation_config = GenerationConfig.from_pretrained(self.model_loading_config.pretrained_model_name_or_path)
 
         # Dynamically modify the configuration based on expansion requirements, note that concat expansion does not increase number of layers
         if self.config.num_hidden_layers == self.num_ori_layers and self.config.architectures[0] != self.CausalLMExpansion.__name__.lower() and not hasattr(self.config, 'expansion'):  # not yet expanded
             # Initialize the model with the updated configuration
             print(f"Model expansion: Loading base model from {self.model_loading_config.pretrained_model_name_or_path}")
-            self.model = AutoModelForCausalLM.from_pretrained(**asdict(self.model_loading_config))
+            self.model: Union[AutoModelForCausalLM, SentenceTransformer] = self._from_pretrained(**asdict(self.model_loading_config))
         else:
             self.model = None
+
+    def _from_pretrained(self, **kwargs):
+        # TODO: support fsdp_cpu_ram_efficient_loading for SentenceTransformer
+        if is_sentence_transformer_model(kwargs["pretrained_model_name_or_path"]):  # support local SentenceTransformer models only(download it first since no token passed for authentication of huggingface model hub)
+            pretrained_model_name_or_path = kwargs.pop("pretrained_model_name_or_path")
+            use_cache, output_attentions = kwargs.pop("use_cache"), kwargs.pop("output_attentions")  # remove the use_cache and output_attentions from kwargs because here we load the auto lm model not causal lm model
+            st_model = SentenceTransformer(model_name_or_path=pretrained_model_name_or_path, model_kwargs=kwargs)
+            # SentenceTransformer uses AutoModel.from_pretrained internally which does not support these attributes(difference from AutoModelForCausalLM.from_pretrained), so pop and set these attributes back
+            st_model.config.use_cache, st_model.config.output_attentions = use_cache, output_attentions
+            return st_model
+        else:
+            return AutoModelForCausalLM.from_pretrained(**kwargs)
 
     def expand_layers(self):
         """
@@ -176,8 +194,14 @@ class ModelExpander:
         self._set_expansion_configs()
         self.model.config = self.CausalLMExpansionConfig.from_dict(self.model.config.to_dict())
 
-        # self.model is still the original model class, we need to update the model class to the expanded model class
-        self.model.__class__ = self.CausalLMExpansion
+        # expanded model is still with the original model class, update the model class to the expanded model class
+        if is_sentence_transformer_model(self.model_loading_config.pretrained_model_name_or_path):
+            self.model.model.config = self.model.config
+            self.model.model.__class__ = self.ModelExpansion
+            self.model.generation_config = self.generation_config
+        else:
+            self.model.__class__ = self.CausalLMExpansion
+            self.model.generation_config = self.generation_config
 
     def expand_layers_hybrid(self):
         """
@@ -244,7 +268,15 @@ class ModelExpander:
         self._set_expansion_configs()
         self.model.config.architectures = [f"{self.model.config.architectures[0]}Expansion"]
         self.model.config = self.CausalLMExpansionConfig.from_dict(self.model.config.to_dict())
-        self.model.__class__ = self.CausalLMExpansion
+
+        # expanded model is still with the original model class, update the model class to the expanded model class
+        if is_sentence_transformer_model(self.model_loading_config.pretrained_model_name_or_path):
+            self.model.model.config = self.model.config
+            self.model.model.__class__ = self.ModelExpansion
+            self.model.generation_config = self.generation_config
+        else:
+            self.model.__class__ = self.CausalLMExpansion
+            self.model.generation_config = self.generation_config
 
     def _create_merged_layer(self, pretrained_layer, expanded_layer, layer_idx):
         params = (pretrained_layer, expanded_layer, layer_idx, self.interpolation_factor, self.interpolation_loss_alpha, self.interpolation_loss_type, self.freeze_interpolation_factor)
@@ -287,6 +319,12 @@ class ModelExpander:
 
         self.model.config.expansion = expansion_config
         self.model.config.trained_from = self.model_loading_config.pretrained_model_name_or_path  # save the original model name for reference, this will be overwritten by training script of SFT or RFHF
+
+        # Remove auto_map from the config to avoid loading custom model class by dynamic module loading.
+        # this is to make sure model loaded with model class from transformers' AutoModel, AutoModelForCausalLM, etc. ./configs/loading.py needs that to wrap the model with FSDP
+        if hasattr(self.model.config, 'auto_map'):
+            del self.model.config.auto_map
+            logging.warning("Model expansion: Removed auto_map from the model config to avoid loading custom model class by dynamic module loading. Disable it and reconfigure ./configs/loading.py if this is necessary.")
 
     @classmethod
     def restore_expansion_configs(cls, model_path_or_name: str, model_loading_config: ModelLoadingConfig) -> ModelLoadingConfig:
@@ -357,7 +395,28 @@ class ModelExpander:
 
     def save_model(self, output_path):
         print(f"Model expansion: Saving expanded model to {output_path}")
-        self.model.save_pretrained(output_path, save_config=True)
+        if isinstance(self.model, SentenceTransformer):
+            self.model.save_pretrained(output_path)
+        else:
+            self.model.save_pretrained(output_path, save_config=True)
+
+        # save the module_file if there is any, e.g. modeling_qwen.py when config.json has custom module by auto_map.
+        # "auto_map": {
+        #     "AutoModel": "modeling_qwen.Qwen2Model",
+        #     "AutoModel": "modeling_qwen.Qwen2ForCausalLM",
+        #     "AutoModelForSequenceClassification": "modeling_qwen.Qwen2ForSequenceClassification",
+        # },
+        if "auto_map" in self.model.config.__dict__:
+            for class_reference in self.model.config.auto_map.values():
+                module_file, class_name = class_reference.split(".")
+                logging.info(f"Model expansion: Custom model class found in config -{module_file}.{class_name}")
+                custom_model_file = Path(self.model_loading_config.pretrained_model_name_or_path) / f"{module_file}.py"
+                output_model_file = Path(output_path)/f"{module_file}.py"
+                if not output_model_file.exists():
+                    logging.info(f"Model expansion: Copying custom model file from {custom_model_file} to {output_path}")
+                    shutil.copy(custom_model_file, output_model_file)
+                else:
+                    logging.info(f"Model expansion: Custom model file {custom_model_file} already exists in {output_path}, skipping copying.")
 
     # Define this as a class method to continue training of previously expanded model with mixing frozen and non-frozen
     @classmethod
@@ -442,13 +501,14 @@ class ModelExpander:
             model_class = ModelRegistry.resolve_model_cls(ori_hf_config.architectures)[0]  # returns (model_cls, arch), so take first one
         else:
             model_class = MODEL_FOR_CAUSAL_LM_MAPPING[type(ori_hf_config)]
+
         config_class = type(ori_hf_config)
 
         # 1: Inherit and extend the original LayerNorm class
 
         # get the module where the model class is defined
         model_module = inspect.getmodule(model_class)
-        # find the DecoderLayer class
+        # find the RMSNorm class
         input_layernorm_class = None
         for name, obj in inspect.getmembers(model_module, inspect.isclass):
             if issubclass(obj, torch.nn.Module) and name.endswith('RMSNorm'):
@@ -544,7 +604,38 @@ class ModelExpander:
 
         cls.CausalLMExpansionConfig = CausalLMExpansionConfig
 
-        # 4: Inherit and expand the original model class
+        # 4: Inherit and expand the original auto lm model class
+        # get the module where the auto lm model class is defined
+        prefix = model_class.__name__.replace("ForCausalLM", "")
+        model_module = inspect.getmodule(model_class)
+        # find the AutoModel class
+        auto_model_class = None
+        for name, obj in inspect.getmembers(model_module, inspect.isclass):
+            if issubclass(obj, torch.nn.Module) and name.endswith('Model') and name.startswith(prefix):
+                auto_model_class = obj
+                break
+        if auto_model_class is not None:
+            print(f"The auto model class is: {auto_model_class}")
+        else:
+            raise ValueError("Auto model class not found.")
+
+        # this is to register it with new config class
+        class ModelExpansion(auto_model_class):
+            config_class = cls.CausalLMExpansionConfig
+
+            # vllm load model by model class with additional parameters so introduce *args, **kwargs here, refer to https://github.com/vllm-project/vllm/blob/fc6c27462614924dca90898ef762d6c56c0874ba/vllm/model_executor/model_loader/loader.py#L160
+            def __init__(self, config: PretrainedConfig, *args, **kwargs):
+                if use_vllm:
+                    super().__init__(config, *args, **kwargs)
+                    # Customize the forward method for vLLM model, this is to make sure kv cache update is done properly as expanded layer and pretrained layer are branched out
+                    # self.model.forward = llama_vllm__forward
+                else:
+                    super().__init__(config)
+
+                # Expand/Customize the pretrained model architecture before loading the pretrained and expanded weights
+                cls._expand_model_for_register(config, self, use_vllm, *args, **kwargs)
+
+        # 5: Inherit and expand the original causal lm model class
 
         if use_vllm and expansion_config:  # monkey patch the forward method of vllm model
             from vllm.model_executor.models.llama import LlamaModel
@@ -576,19 +667,107 @@ class ModelExpander:
                 else:
                     super().__init__(config)
 
-                if config.expansion["expand_type"] == "concat":
-                    # Expand the model by adding new layers as sidecar of the original layers by configuration
-                    new_layers = []
-                    for layer_idx, layer in enumerate(self.model.layers):
-                        if layer_idx not in self.model.config.expansion["freezed_layers"]:
-                            print(f"Model expansion regsitering - concat: Concatenating new layer at layer {layer_idx}")
+                # Make self.model which is already instantiated to be the expanded model class ModelExpansion
+                self.model.__class__ = ModelExpansion
 
-                            def get_value_or_default(config_dict, key, default):
-                                return config_dict.get(key) if config_dict.get(key) is not None else default
+                # Expand/Customize the pretrained model architecture before loading the pretrained and expanded weights
+                cls._expand_model_for_register(config, self.model, use_vllm, *args, **kwargs)
+
+        cls.CausalLMExpansion = CausalLMExpansion
+        cls.ModelExpansion = ModelExpansion
+
+        # 6: Register the new model class with transformers along with the new model config class
+
+        # To update CONFIG_MAPPING_NAMES["causallmexpansion"] = "CausalLMExpansionConfig"
+        AutoConfig.register(CausalLMExpansion.__name__.lower(), cls.CausalLMExpansionConfig, exist_ok=True)
+
+        # Register custom model to transformers: https://huggingface.co/docs/transformers/en/custom_models, to update MODEL_FOR_CAUSAL_LM_MAPPING[cls.CausalLMExpansionConfig] = cls.CausalLMExpansion
+        AutoModelForCausalLM.register(cls.CausalLMExpansionConfig, cls.CausalLMExpansion, exist_ok=True)
+
+        # Register AutoModel with the new config class
+        AutoModel.register(cls.CausalLMExpansionConfig, cls.ModelExpansion, exist_ok=True)
+
+        # Register custom model to vLLM: https://docs.vllm.ai/en/v0.5.5/models/adding_model.html
+        ModelRegistry.register_model(CausalLMExpansion.__name__, cls.CausalLMExpansion)
+        print(f"Model expansion regsitering: Registered new model class {CausalLMExpansion.__name__} with transformers and vLLM")
+
+    @classmethod
+    def _expand_model_for_register(cls, config, model, use_vllm=False, *args, **kwargs):
+            if config.expansion["expand_type"] == "concat":
+                # Expand the model by adding new layers as sidecar of the original layers by configuration
+                new_layers = []
+                for layer_idx, layer in enumerate(model.layers):
+                    if layer_idx not in model.config.expansion["freezed_layers"]:
+                        print(f"Model expansion regsitering - concat: Concatenating new layer at layer {layer_idx}")
+
+                        def get_value_or_default(config_dict, key, default):
+                            return config_dict.get(key) if config_dict.get(key) is not None else default
+
+                        # get_value_or_default(config.expansion, "interpolation_factor", None) is to support interpolation_factor being None in the config: no interpolation
+                        interpolation_factor, interpolation_loss_alpha, interpolation_loss_type, interpolation_norm_alpha, freeze_interpolation_factor = get_value_or_default(config.expansion, "interpolation_factor", None), get_value_or_default(config.expansion, "interpolation_loss_alpha", 0), get_value_or_default(config.expansion, "interpolation_loss_type", "cosine"), get_value_or_default(config.expansion, "interpolation_norm_alpha", 0), get_value_or_default(config.expansion, "freeze_interpolation_factor", False)
+
+                        if use_vllm:
+                            # Create a new layer of the same class with the same configuration
+                            expanded_layer = cls.ExpandedDecoderLayer(config, layer_idx, interpolation_norm_alpha, interpolation_factor, freeze_interpolation_factor, cache_config=kwargs.get("cache_config"), quant_config=kwargs.get("quant_config"), prefix=kwargs.get("prefix"))
+                        else:
+                            # Create a new layer of the same class with the same configuration, note that interpolation_norm_alpha, interpolation_factor are only passed in here for initialization, will be reassigned in the MergeLayer init method
+                            expanded_layer = cls.ExpandedDecoderLayer(config, layer_idx, interpolation_norm_alpha, interpolation_factor, freeze_interpolation_factor)
+
+                        # Manually copy parameters from the original layer to the new layer
+                        expanded_layer.load_state_dict(layer.state_dict(), strict=False)  # strict=False becasue new parameter interpolation_factor is added
+                        expanded_layer.requires_grad_(True)
+
+                        # layer.requires_grad_(False)  # freeze the original layer typically, but not needed here since it will be determined by config.expansion["freeze_ori_layers"]
+                        # Insert a MergeLayer which handles the logic of combining outputs
+                        params = (layer, expanded_layer, layer_idx, interpolation_factor, interpolation_loss_alpha, interpolation_loss_type, freeze_interpolation_factor, use_vllm)
+                        if config.expansion["merge_method"] == "slerp":
+                            merged_layer = MergeLayerSlerp(*params)
+                        elif config.expansion["merge_method"] == "dlerp":
+                            merged_layer = MergeLayerDlerp(*params)
+                        elif config.expansion["merge_method"] == "dlerpin":
+                            merged_layer = MergeLayerDlerpIn(*params)
+                        elif config.expansion["merge_method"] == "moe":
+                            merged_layer = MergeLayerMoE(*params)
+                        elif config.expansion["merge_method"] == "lerp":
+                            merged_layer = MergeLayerLerp(*params)
+                        elif config.expansion["merge_method"] == "proj":
+                            merged_layer = MergeLayerProj(*params)
+                        elif config.expansion["merge_method"] == "prog":
+                            merged_layer = MergeLayerProg(*params)
+                        else:
+                            raise ValueError(f"Invalid merge method: {config.expansion['merge_method']}, supported: slerp, dlerp, dlerpin, lerp, proj, prog, moe")
+                        new_layers.append(merged_layer)
+                    else:
+                        # For frozen layers, simply reuse the original layer
+                        new_layers.append(layer)
+
+                # Replace the old layers with the new merged layers
+                model.layers = ModuleList(new_layers)
+
+            elif config.expansion["expand_type"] == "hybrid":
+                # Expand the model by alternating between stacking new layers and adding them as sidecars
+                new_layers = []
+                method_index = 0
+                expand_methods = ['stack', 'concat']
+
+                for layer_idx, layer in enumerate(model.layers):
+                    if layer_idx not in config.expansion["freezed_layers"]:
+                        expand_method = expand_methods[method_index % 2]
+                        method_index += 1
+
+                        # half of the expanded layers are stacked and the other half are concatenated
+                        if expand_method == 'stack':
+                            # new layers are already stacked by the changed model config(model.config.num_hidden_layers), so no need to expand here
+                            print(f"Model expansion regsitering - hybrid: Keeping stacked layer {layer_idx} unfrozen")
+                            new_layers.append(layer)
+                        elif expand_method == 'concat':
+                            # Concat expansion: merge original layer with a new expanded layer
+                            print(f"Model expansion regsitering - hybrid: Concatenating new layer at layer {layer_idx}")
 
                             # get_value_or_default(config.expansion, "interpolation_factor", None) is to support interpolation_factor being None in the config: no interpolation
-                            interpolation_factor, interpolation_loss_alpha, interpolation_loss_type, interpolation_norm_alpha, freeze_interpolation_factor = get_value_or_default(config.expansion, "interpolation_factor", None), get_value_or_default(config.expansion, "interpolation_loss_alpha", 0), get_value_or_default(config.expansion, "interpolation_loss_type", "cosine"), get_value_or_default(config.expansion, "interpolation_norm_alpha", 0), get_value_or_default(config.expansion, "freeze_interpolation_factor", False)
+                            interpolation_factor, interpolation_loss_alpha, interpolation_loss_type, interpolation_norm_alpha, freeze_interpolation_factor = config.expansion.get("interpolation_factor", None), config.expansion.get("interpolation_loss_alpha", 0), config.expansion.get("interpolation_loss_type", "cosine"), config.expansion.get("interpolation_norm_alpha", 0), config.expansion.get("freeze_interpolation_factor", False)
 
+                            # Create a new layer of the same class with the same configuration, note that interpolation_norm_alpha, interpolation_factor are only passed in here for initialization, will be reassigned in the MergeLayer init method
                             if use_vllm:
                                 # Create a new layer of the same class with the same configuration
                                 expanded_layer = cls.ExpandedDecoderLayer(config, layer_idx, interpolation_norm_alpha, interpolation_factor, freeze_interpolation_factor, cache_config=kwargs.get("cache_config"), quant_config=kwargs.get("quant_config"), prefix=kwargs.get("prefix"))
@@ -596,12 +775,11 @@ class ModelExpander:
                                 # Create a new layer of the same class with the same configuration, note that interpolation_norm_alpha, interpolation_factor are only passed in here for initialization, will be reassigned in the MergeLayer init method
                                 expanded_layer = cls.ExpandedDecoderLayer(config, layer_idx, interpolation_norm_alpha, interpolation_factor, freeze_interpolation_factor)
 
-                            # Manually copy parameters from the original layer to the new layer
                             expanded_layer.load_state_dict(layer.state_dict(), strict=False)  # strict=False becasue new parameter interpolation_factor is added
                             expanded_layer.requires_grad_(True)
 
-                            # layer.requires_grad_(False)  # freeze the original layer typically, but not needed here since it will be determined by config.expansion["freeze_ori_layers"]
                             # Insert a MergeLayer which handles the logic of combining outputs
+                            # layer.requires_grad_(False)  # freeze the original layer typically, but not needed here since it will be determined by config.expansion["freeze_ori_layers"]
                             params = (layer, expanded_layer, layer_idx, interpolation_factor, interpolation_loss_alpha, interpolation_loss_type, freeze_interpolation_factor, use_vllm)
                             if config.expansion["merge_method"] == "slerp":
                                 merged_layer = MergeLayerSlerp(*params)
@@ -620,91 +798,17 @@ class ModelExpander:
                             else:
                                 raise ValueError(f"Invalid merge method: {config.expansion['merge_method']}, supported: slerp, dlerp, dlerpin, lerp, proj, prog, moe")
                             new_layers.append(merged_layer)
-                        else:
-                            # For frozen layers, simply reuse the original layer
-                            new_layers.append(layer)
 
-                    # Replace the old layers with the new merged layers
-                    self.model.layers = ModuleList(new_layers)
+                    else:
+                        # For frozen layers, simply reuse the original layer
+                        print(f"Model expansion regsitering - hybrid: Keeping original layer {layer_idx} frozen")
+                        new_layers.append(layer)
 
-                elif config.expansion["expand_type"] == "hybrid":
-                    # Expand the model by alternating between stacking new layers and adding them as sidecars
-                    new_layers = []
-                    method_index = 0
-                    expand_methods = ['stack', 'concat']
-
-                    for layer_idx, layer in enumerate(self.model.layers):
-                        if layer_idx not in config.expansion["freezed_layers"]:
-                            expand_method = expand_methods[method_index % 2]
-                            method_index += 1
-
-                            # half of the expanded layers are stacked and the other half are concatenated
-                            if expand_method == 'stack':
-                                # new layers are already stacked by the changed model config(model.config.num_hidden_layers), so no need to expand here
-                                print(f"Model expansion regsitering - hybrid: Keeping stacked layer {layer_idx} unfrozen")
-                                new_layers.append(layer)
-                            elif expand_method == 'concat':
-                                # Concat expansion: merge original layer with a new expanded layer
-                                print(f"Model expansion regsitering - hybrid: Concatenating new layer at layer {layer_idx}")
-
-                                # get_value_or_default(config.expansion, "interpolation_factor", None) is to support interpolation_factor being None in the config: no interpolation
-                                interpolation_factor, interpolation_loss_alpha, interpolation_loss_type, interpolation_norm_alpha, freeze_interpolation_factor = config.expansion.get("interpolation_factor", None), config.expansion.get("interpolation_loss_alpha", 0), config.expansion.get("interpolation_loss_type", "cosine"), config.expansion.get("interpolation_norm_alpha", 0), config.expansion.get("freeze_interpolation_factor", False)
-
-                                # Create a new layer of the same class with the same configuration, note that interpolation_norm_alpha, interpolation_factor are only passed in here for initialization, will be reassigned in the MergeLayer init method
-                                if use_vllm:
-                                    # Create a new layer of the same class with the same configuration
-                                    expanded_layer = cls.ExpandedDecoderLayer(config, layer_idx, interpolation_norm_alpha, interpolation_factor, freeze_interpolation_factor, cache_config=kwargs.get("cache_config"), quant_config=kwargs.get("quant_config"), prefix=kwargs.get("prefix"))
-                                else:
-                                    # Create a new layer of the same class with the same configuration, note that interpolation_norm_alpha, interpolation_factor are only passed in here for initialization, will be reassigned in the MergeLayer init method
-                                    expanded_layer = cls.ExpandedDecoderLayer(config, layer_idx, interpolation_norm_alpha, interpolation_factor, freeze_interpolation_factor)
-
-                                expanded_layer.load_state_dict(layer.state_dict(), strict=False)  # strict=False becasue new parameter interpolation_factor is added
-                                expanded_layer.requires_grad_(True)
-
-                                # Insert a MergeLayer which handles the logic of combining outputs
-                                # layer.requires_grad_(False)  # freeze the original layer typically, but not needed here since it will be determined by config.expansion["freeze_ori_layers"]
-                                params = (layer, expanded_layer, layer_idx, interpolation_factor, interpolation_loss_alpha, interpolation_loss_type, freeze_interpolation_factor, use_vllm)
-                                if config.expansion["merge_method"] == "slerp":
-                                    merged_layer = MergeLayerSlerp(*params)
-                                elif config.expansion["merge_method"] == "dlerp":
-                                    merged_layer = MergeLayerDlerp(*params)
-                                elif config.expansion["merge_method"] == "dlerpin":
-                                    merged_layer = MergeLayerDlerpIn(*params)
-                                elif config.expansion["merge_method"] == "moe":
-                                    merged_layer = MergeLayerMoE(*params)
-                                elif config.expansion["merge_method"] == "lerp":
-                                    merged_layer = MergeLayerLerp(*params)
-                                elif config.expansion["merge_method"] == "proj":
-                                    merged_layer = MergeLayerProj(*params)
-                                elif config.expansion["merge_method"] == "prog":
-                                    merged_layer = MergeLayerProg(*params)
-                                else:
-                                    raise ValueError(f"Invalid merge method: {config.expansion['merge_method']}, supported: slerp, dlerp, dlerpin, lerp, proj, prog, moe")
-                                new_layers.append(merged_layer)
-
-                        else:
-                            # For frozen layers, simply reuse the original layer
-                            print(f"Model expansion regsitering - hybrid: Keeping original layer {layer_idx} frozen")
-                            new_layers.append(layer)
-
-                    # Replace the old layers with the new expanded layers
-                    self.model.layers = ModuleList(new_layers)
-                    assert self.model.config.num_hidden_layers == len(new_layers), "Number of expanded layers does not match the expected number"
-                else:
-                    raise ValueError(f"Invalid expand type: {config.expansion['expand_type']}, supported: concat, hybrid")
-
-        cls.CausalLMExpansion = CausalLMExpansion
-
-        # 5: Register the new model class with transformers along with the new model config class
-
-        # To update CONFIG_MAPPING_NAMES["causallmexpansion"] = "CausalLMExpansion"
-        AutoConfig.register(CausalLMExpansion.__name__.lower(), cls.CausalLMExpansionConfig, exist_ok=True)
-
-        # Register custom model to transformers: https://huggingface.co/docs/transformers/en/custom_models, to update MODEL_FOR_CAUSAL_LM_MAPPING[cls.CausalLMExpansionConfig] = cls.CausalLMExpansion
-        AutoModelForCausalLM.register(cls.CausalLMExpansionConfig, cls.CausalLMExpansion, exist_ok=True)
-        # Register custom model to vLLM: https://docs.vllm.ai/en/v0.5.5/models/adding_model.html
-        ModelRegistry.register_model(CausalLMExpansion.__name__, cls.CausalLMExpansion)
-        print(f"Model expansion regsitering: Registered new model class {CausalLMExpansion.__name__} with transformers and vLLM")
+                # Replace the old layers with the new expanded layers
+                model.layers = ModuleList(new_layers)
+                assert model.config.num_hidden_layers == len(new_layers), "Number of expanded layers does not match the expected number"
+            else:
+                raise ValueError(f"Invalid expand type: {config.expansion['expand_type']}, supported: concat, hybrid")
 
     @classmethod
     def get_additional_loss(cls, model, loss) -> torch.Tensor:
@@ -1788,7 +1892,7 @@ class MergeLayerSlerp(MergeLayer):
     approach with an adjustable interpolation factor, approximating with linear
     interpolation when vectors are closely aligned.
     """
-    def __init__(self, pretrained_layer, expanded_layer, layer_idx, interpolation_factor=0.0, interpolation_loss_alpha=0, interpolation_loss_type="cosine", freeze_interpolation_factor=False, use_vllm=False, small_theta_threshold: float = 1e-4):
+    def __init__(self, pretrained_layer, expanded_layer, layer_idx, interpolation_factor=0.0, interpolation_loss_alpha=0, interpolation_loss_type="cosine", freeze_interpolation_factor=False, use_vllm=False, small_theta_threshold: float=1e-4):
         super().__init__(pretrained_layer, expanded_layer, layer_idx, interpolation_loss_alpha, interpolation_loss_type, freeze_interpolation_factor, use_vllm)
 
         self.small_theta_threshold = small_theta_threshold
@@ -2864,8 +2968,6 @@ if __name__ == "__main__":
     expander = ModelExpander(model_loading_config, resume_checkpoint_path)
     if expander.model:
         expander.expand_layers()
-        # create the directory to save the expanded model
-        Path(exp_model_save_dir).mkdir(parents=True, exist_ok=True)
         expander.save_model(exp_model_save_dir)
     else:
         print(f"Model {expander.model_loading_config.pretrained_model_name_or_path} has already been expanded. Skipping expansion.")

@@ -8,13 +8,13 @@ from typing import Any, Dict, Optional, List
 from torch.utils.data import Dataset, DataLoader
 from datasets import Dataset as HFDataset, concatenate_datasets, DatasetDict
 
-from transformers import default_data_collator
+from transformers import default_data_collator, PreTrainedModel, PreTrainedTokenizer
 from transformers.data import DataCollatorForSeq2Seq
 
 from controlllm.utils.config_utils import Configs
 from controlllm.utils.dataset_sampler import LengthBasedBatchSampler, DistributedLengthBasedBatchSampler, CustomDistributedSampler, create_batches
 
-from controlllm.data import DATASET_PREPROC
+from controlllm.data import DATASET_PREPROC, DATASET_POSTPROC, DATALOADER_COLLATE_FUNC, sample_dataset
 from controlllm.configs.datasets import AbstractDataset
 from controlllm.configs.training import TrainConfigCommon
 
@@ -22,9 +22,10 @@ from controlllm.configs.training import TrainConfigCommon
 class DataLoaderWrapper:
     # list of important attributes: dataset_train (torch.utils.data.Dataset), dataset_val (torch.utils.data.Dataset),
     # train_dataloader (torch.utils.data.DataLoader), eval_dataloader (torch.utils.data.DataLoader), configs, tokenizer
-    def __init__(self, configs: Configs, tokenizer):
+    def __init__(self, configs: Configs, tokenizer: PreTrainedTokenizer, model: PreTrainedModel):
         self.configs = configs
         self.tokenizer = tokenizer
+        self.model = model
 
         # prepare train_dataloader and eval_dataloader
         self.prepare_data_loader()
@@ -37,7 +38,9 @@ class DataLoaderWrapper:
             try:
                 dataset_train: BatchDataset = self.get_preprocessed_dataset(dataset_config, split="train")
                 logging.info(f"--> Training Set {dataset_train.dataset_config.dataset} Length = {len(dataset_train)} Token count = {dataset_train.num_tokens}. Max token length = {max(dataset_train.lengths) if hasattr(dataset_train, 'lengths') and dataset_train.lengths else 'N/A'}. Min token length = {min(dataset_train.lengths) if hasattr(dataset_train, 'lengths') and dataset_train.lengths else 'N/A'}")
-                logging.info(f"--> Training Set example: {self.tokenizer.decode(dataset_train[0]['input_ids'])}")
+                keys_with_input_ids = [key for key in dataset_train[0] if 'input_ids' in key]
+                for key in keys_with_input_ids:
+                    logging.info(f"--> Training Set example ({key}): {self.tokenizer.decode(dataset_train[0][key])}")
 
                 # Note that dataset_config.run_validation enables dataset level control to be included in evaluation or not
                 if (self.configs.train_config.run_validation or dataset_config.include_val) and dataset_config.run_validation:
@@ -56,7 +59,10 @@ class DataLoaderWrapper:
                         dataset_val = self.get_preprocessed_dataset(dataset_config, split="test")
 
                     logging.info(f"--> Validation Set {dataset_val.dataset_config.dataset} Length = {len(dataset_val)} Token count = {dataset_val.num_tokens}. Max token length = {max(dataset_val.lengths) if hasattr(dataset_val, 'lengths') and dataset_val.lengths else 'N/A'}. Min token length = {min(dataset_val.lengths) if hasattr(dataset_val, 'lengths') and dataset_val.lengths else 'N/A'}")
-                    logging.info(f"--> Validation Set example: {self.tokenizer.decode(dataset_train[0]['input_ids'])}")
+                    keys_with_input_ids = [key for key in dataset_train[0] if 'input_ids' in key]
+                    for key in keys_with_input_ids:
+                        logging.info(f"--> Validation Set example: {self.tokenizer.decode(dataset_train[0][key])}")
+
                     self.dataset_val.append(dataset_val)
 
                 # if dataset_config.include_val is True, include validation set in training, this only makes sense in pretraining
@@ -87,6 +93,12 @@ class DataLoaderWrapper:
 
         train_dl_kwargs = self.get_dataloader_kwargs(self.dataset_train, "train")
 
+        dataset_processor = self.tokenizer  # TODO: only support LLM, enhance this to support AutoProcessor for VLM model training
+        custom_data_collator = self.get_custom_data_collator(dataset_processor, self.configs.dataset_configs)
+        if custom_data_collator:
+            logging.info(f"Using custom data collator {custom_data_collator} instead of the default data collator {train_dl_kwargs['collate_fn']}.")
+            train_dl_kwargs["collate_fn"] = custom_data_collator
+
         # Create DataLoaders for the training and validation dataset
         self.train_dataloader = DataLoader(
             self.dataset_train,
@@ -98,6 +110,9 @@ class DataLoaderWrapper:
         self.eval_dataloader = None
         if self.configs.train_config.run_validation:
             val_dl_kwargs = self.get_dataloader_kwargs(self.dataset_val, "val")
+
+            if custom_data_collator:
+                val_dl_kwargs["collate_fn"] = custom_data_collator
 
             self.eval_dataloader = DataLoader(
                 self.dataset_val,
@@ -123,6 +138,8 @@ class DataLoaderWrapper:
         # add batch strategy in the cache path
         dataset_cache_dir = dataset_cache_dir / self.configs.train_config.batching_strategy
         dataset_cache_dir.resolve().mkdir(parents=True, exist_ok=True)
+        # need to convert to str for rest of the code to work
+        dataset_cache_dir = str(dataset_cache_dir)
 
         # try to load the dataset from cache if force_refresh is False
         if dataset_config.force_refresh is False:
@@ -130,26 +147,36 @@ class DataLoaderWrapper:
         else:
             processed_dataset = None
             logging.info(f"Force refresh is set to True, reprocessing the dataset. Cache path: {dataset_cache_dir}..")
-        if processed_dataset is not None:
-            return processed_dataset
 
-        # Sync through the barrier to avoid duplicated work
-        if self.configs.setup_config.rank == 0:
-            processed_dataset = self.process_dataset(dataset_config, split)
-            # Save the processed dataset to the cache path, FIXME: metadata is not persisted
-            processed_dataset.save_to_disk(dataset_cache_dir)  # type: ignore
-            logging.info("Finished text preprocessing from the main process")
-            # Signal other Processes to wait until the main process has completed the mapping and saving
-            torch.distributed.barrier()
-        else:
-            logging.info("Waiting for main process to perform text preprocessing")
-            torch.distributed.barrier()
-            logging.info("Finished waiting for main process to perform text preprocessing, loading from cache...")
-            processed_dataset = self.get_dataset_from_cache(dataset_config, dataset_cache_dir)
-            logging.info("Finished loading from cache")
-            if processed_dataset is None:
-                logging.warning("[abnormal] The dataset is not yet cached by main process in {dataset_cache_dir}. Reprocessing in other rank...")         
+        if processed_dataset is None:
+            # Preprocess the dataset
+            # Sync through the barrier to avoid duplicated work
+            if self.configs.setup_config.rank == 0:
                 processed_dataset = self.process_dataset(dataset_config, split)
+                # Save the processed dataset to the cache path, FIXME: metadata is not persisted
+                processed_dataset.save_to_disk(dataset_cache_dir)  # type: ignore
+                logging.info("Finished text preprocessing from the main process")
+                # Signal other Processes to wait until the main process has completed the mapping and saving
+                torch.distributed.barrier()
+            else:
+                logging.info("Waiting for main process to perform text preprocessing")
+                torch.distributed.barrier()
+                logging.info("Finished waiting for main process to perform text preprocessing, loading from cache...")
+                processed_dataset = self.get_dataset_from_cache(dataset_config, dataset_cache_dir)
+                logging.info("Finished loading from cache")
+                if processed_dataset is None:
+                    logging.warning(f"[abnormal] The dataset is not yet cached by main process in {dataset_cache_dir}. Reprocessing in other rank...")         
+                    processed_dataset = self.process_dataset(dataset_config, split)
+
+        # Postprocess the dataset
+        postprocessed_dataset = self.postprocess_dataset(processed_dataset, dataset_cache_dir, dataset_config, split)
+        if postprocessed_dataset:
+            processed_dataset = postprocessed_dataset
+
+        if not dataset_config.sample_before_preprocessing:
+            logging.info(f"Sampling the dataset after data preprocessing {dataset_config.dataset} - {split}...")
+            processed_dataset.hf_dataset = sample_dataset(processed_dataset.hf_dataset, dataset_config, split)
+            logging.info(f"Finished sampling the dataset after data preprocessing {dataset_config.dataset} - {split}.")
 
         return processed_dataset
 
@@ -186,6 +213,40 @@ class DataLoaderWrapper:
         logging.info("Finished applying batching strategy.")
 
         return processed_dataset
+
+    def postprocess_dataset(self, processed_dataset: "BatchDataset", dataset_cache_dir: str, dataset_config: AbstractDataset, split: str = "train"):
+        if dataset_config.enable_post_process and dataset_config.dataset in DATASET_POSTPROC:
+            logging.info(f"Postprocessing the dataset: {dataset_config.dataset} - {split}...")
+            postprocessed_dataset_cache_dir = Path(dataset_cache_dir) / "postprocessed" / self.model.config._name_or_path.replace("/", "__")
+            postprocessed_dataset_cache_dir.resolve().mkdir(parents=True, exist_ok=True)
+            postprocessed_dataset_cache_dir = str(postprocessed_dataset_cache_dir)
+
+            # try to load the dataset from cache if force_refresh is False
+            if dataset_config.force_refresh is False:
+                postprocessed_dataset = self.get_dataset_from_cache(dataset_config, postprocessed_dataset_cache_dir)
+            else:
+                postprocessed_dataset = None
+                logging.info(f"Force refresh is set to True, reprocessing the dataset. Cache path: {postprocessed_dataset_cache_dir}..")
+
+            if postprocessed_dataset is None:
+                processed_dataset.hf_dataset = DATASET_POSTPROC[dataset_config.dataset](processed_dataset.hf_dataset, dataset_config, self.tokenizer, self.model, split)
+                if self.configs.setup_config.rank == 0:
+                    # Save the processed dataset to the cache path, FIXME: metadata is not persisted
+                    processed_dataset.save_to_disk(postprocessed_dataset_cache_dir)
+                    logging.info(f"Finished postprocessing the dataset: {dataset_config.dataset} - {split}")
+                    torch.distributed.barrier()
+                else:
+                    logging.info("Waiting for main process to perform postprocessing")
+                    torch.distributed.barrier()
+                    logging.info("Finished waiting for main process to perform postprocessing, loading from cache...")
+                    processed_dataset = self.get_dataset_from_cache(dataset_config, postprocessed_dataset_cache_dir)
+                    logging.info("Finished loading from cache")
+                return processed_dataset
+            else:
+                return postprocessed_dataset
+        else:
+            logging.info(f"Postprocessing is disabled for the dataset: {dataset_config.dataset} - {split}.")
+            return None
 
     def get_dataset_from_cache(self, dataset_config: AbstractDataset, dataset_cache_dir: str) -> Optional[torch.utils.data.Dataset]:
         # Load the dataset from cache
@@ -249,6 +310,35 @@ class DataLoaderWrapper:
 
             return kwargs
 
+    def get_custom_data_collator(self, dataset_processor, dataset_configs) -> torch.utils.data.Dataset:
+        """
+        If any dataset has a custom collate function, use it.
+        If there is a different collate function for different datasets, raise an error.
+        If there is no custom collate function, use the default (None).
+        """
+        collate_funcs = []
+
+        # Gather all custom collate functions for each dataset, if available
+        for dataset_config in dataset_configs:
+            if dataset_config.dataset in DATALOADER_COLLATE_FUNC:
+                collate_funcs.append(DATALOADER_COLLATE_FUNC[dataset_config.dataset])
+            else:
+                # If even one dataset isn't found in DATALOADER_COLLATE_FUNC, no custom collator
+                continue
+
+        # If no custom collators were found at all
+        if not collate_funcs:
+            return None
+
+        # Verify all collate functions are the same
+        first_func = collate_funcs[0]
+        for func in collate_funcs[1:]:
+            if func != first_func:
+                raise ValueError(f"Different collate functions found for different datasets. {collate_funcs}")
+
+        # Return the single collate function with the first dataset_config
+        return first_func(dataset_processor)
+
 
 class BatchDataset(Dataset):
     # this is a wrapper class for the hf_dataset, which is batched according to the batching_strategy
@@ -273,9 +363,19 @@ class BatchDataset(Dataset):
                 # Note that we don't actually pad here
                 # DataCollatorForSeq2Seq of dataloading's Data collator will dynamically pad the inputs received with similar length, as well as the labels.
                 # pre-compute the length of each example for merge sort batching, note that batch["lengths"] is required for fixed batch size, so it is always computed separately before the phase_batches
-                first_key = next(iter(batch.keys()))
-                lengths = [len(d) for d in batch[first_key]]
-                batch["lengths"] = lengths
+                input_ids_keys = [key for key in batch.keys() if "input_ids" in key]
+
+                if input_ids_keys:
+                    # sum up the lengths of all input_ids_keys
+                    total_lengths = [0] * len(batch[input_ids_keys[0]])
+                    for key in input_ids_keys:
+                        lengths = [len(d) for d in batch[key]]
+                        total_lengths = [sum(x) for x in zip(total_lengths, lengths)]
+                    batch["lengths"] = total_lengths
+                else:
+                    # Initialize lengths with zeros if no input_ids_keys are found
+                    first_value = next(iter(batch.values()), [])
+                    batch["lengths"] = [0] * len(first_value)
 
                 return batch
             else:  # packing
@@ -304,11 +404,11 @@ class BatchDataset(Dataset):
                         padding_length = self.train_config.context_length - len(remaining_elements)
 
                         # Create the padding tensor
-                        if key == "input_ids":
+                        if "input_ids" in key:
                             padding_value = self.tokenizer.pad_token_id
-                        elif key == "labels":
+                        elif "labels" in key:
                             padding_value = -100
-                        elif key == "attention_mask":
+                        elif "attention_mask" in key:
                             padding_value = 0
                         else:
                             padding_value = 0  # or whatever value you want to use for padding
@@ -330,6 +430,7 @@ class BatchDataset(Dataset):
             function=process_batch,
             batched=True,
             batch_size=batch_size_for_map,
+            cache_file_name=str(Path(self.dataset_config.dataset_map_cache_dir) / "process_batch.arrow"),
             load_from_cache_file=False if self.dataset_config.force_refresh else True,
             num_proc=self.dataset_config.max_workers,
             desc=f"Applying batching with {self.train_config.batching_strategy} strategy: {'computing sequence lengths' if self.train_config.batching_strategy == 'padding' else 'packing sequences to fixed length'}"
@@ -349,6 +450,7 @@ class BatchDataset(Dataset):
                 function=partial(precompute_phased_batch, train_config=self.train_config, split=self.split),
                 batched=True,
                 batch_size=batch_size_for_map,
+                cache_file_name=str(Path(self.dataset_config.dataset_map_cache_dir) / "precompute_phased_batch.arrow"),
                 load_from_cache_file=False if self.dataset_config.force_refresh else True,
                 num_proc=self.dataset_config.max_workers,
                 remove_columns=list(self.hf_dataset.features),
@@ -473,7 +575,7 @@ class MergedDataset(Dataset):
                 adjusted = True
                 current_indices = len(batch_datasets[0])
                 for batch_dataset in batch_datasets[1:]:
-                    if(not self._adjust_indices(batch_dataset, current_indices)):
+                    if (not self._adjust_indices(batch_dataset, current_indices)):
                         adjusted = False
                     current_indices += len(batch_dataset)
 
@@ -539,11 +641,27 @@ class MergedDataset(Dataset):
         else:
             return False
 
+
 def precompute_phased_batch(batch, train_config: TrainConfigCommon, split: str="train") -> Dict[str, Any]:
+    """
+    Precompute the phase_batches for dynamic batch size, w/wo curriculum learning.
+    Decouple the phase_batches from the hf_dataset for better performance in multi-processing.
+    """
     if "lengths" not in batch.keys():  # job may fail in the middle, so check if "lengths" is already computed
         # pre-compute the length of each example for merge sort batching
-        first_key = next(iter(batch.keys()))
-        lengths = [len(d) for d in batch[first_key]]
+        input_ids_keys = [key for key in batch.keys() if "input_ids" in key]
+
+        if input_ids_keys:
+            # sum up the lengths of all input_ids_keys
+            total_lengths = [0] * len(batch[input_ids_keys[0]])
+            for key in input_ids_keys:
+                lengths = [len(d) for d in batch[key]]
+                total_lengths = [sum(x) for x in zip(total_lengths, lengths)]
+            lengths = total_lengths
+        else:
+            # Initialize lengths with zeros if no input_ids_keys are found
+            first_value = next(iter(batch.values()), [])
+            lengths = [0] * len(first_value)
     else:
         lengths = batch["lengths"]
 

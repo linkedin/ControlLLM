@@ -78,6 +78,7 @@ class TrainConfigCommon:
     eval_steps: int = 1000  # default to every 500 iterations
     eval_epoch: int = 1  # default to every 1 epoch, in native trainer, it is every eval_step OR eval_epoch
     eval_in_memory: bool = False  # evaluate in memory, set to True to reduce I/O and avoid torch.distributed.barrier(), however, it is accurate only for addictive metrics
+    eval_metrics: List[str] = field(default_factory=lambda: ["roc_auc", "pr_auc"])  # supported either ["rouge", "sacrebleu"] for causual lm or ["roc_auc", "pr_auc"] for embedding lm
     # stop by max_eval_step for eval, set to 0 or negative to disable it
     max_eval_step: int = 500
     hf_hub_metrics_cache_dir: str = "/home/jobuser/metrics/"  # cache for huggingface metrics

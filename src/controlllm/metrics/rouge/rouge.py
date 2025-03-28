@@ -176,7 +176,7 @@ class Rouge(evaluate.Metric):
                 for ref_batch, pred_batch in tqdm(
                     zip(batched(references, batch_size), batched(predictions, batch_size)),
                     total=total_batches,
-                    desc=f"Processing Batches of every {batch_size} data points",
+                    desc=f"Processing Batches of every {batch_size}",
                 ):
                     future_to_pair = {executor.submit(process_pair_with_args, ref, pred): (ref, pred) for ref, pred in zip(ref_batch, pred_batch)}
 

@@ -42,26 +42,27 @@ isort>=5.12.0
 ninja>=1.11.1
 packaging>=23.0
 parameterized>=0.9.0
-# peft==0.6.1
 # protobuf==3.20.1  # Needed to avoid conflicts with `transformers`
 pytest==7.4.3
 safetensors>=0.3.3
 scipy==1.11.3
 tensorboard==2.15.2
-# torch==2.1.0
 SentencePiece==0.2.0  # Needed for LlamaTokenizer in transformers
 # accelerate==0.26.1
 # bitsandbytes==0.41.2.post2
 # bitsandbytes==0.37.2  # the version that works with cu118
-peft==0.12.0  # needed for PE fine tuning
+peft==0.13.2  # needed for PE fine tuning
 tiktoken==0.7.0
 fairscale==0.4.13
-trl==0.8.6
+trl==0.14.0
+mteb==1.34.28
 py7zr==0.20.5
 fire==0.4.0
 torch-tb-profiler==0.4.1
 ipywidgets==8.0.4
-datasets==2.18.0
+ir_datasets==0.5.9
+datasets==2.21.0
+pyarrow==17.0.0
 jinja2>=3.0.0
 tqdm>=4.64.1
 pydantic-settings==2.5.2
@@ -70,6 +71,13 @@ optuna==3.6.0
 omegaconf==2.3.0
 urllib3==2.2.1
 immutabledict==2.2.3  # lm-evaluation-harness needs this
+portalocker==3.1.1  # for ConditionalFileHandler to work in ./utils/__init__.py
+# for evaluation with ebr to work
+langchain==0.3.21
+langchain-community==0.3.19
+faiss-gpu==1.7.2
+redis==5.2.1
+Flask==3.1.0
 
 # triton kernels
 triton==3.0.0
@@ -97,8 +105,8 @@ flash-attn==2.6.3+cu118torch2.4cxx11abifalse
 vllm-flash-attn==2.6.1+cu118
 xformers==0.0.27.post2+cu118
 # TODO: bump up version to >=4.46.1 for bug fix of gradient accumulation: https://github.com/huggingface/transformers/pull/34191/files#diff-977ff3d959128cb90b7c1b0461bbd614b2d2f242e56ce4bb3673f0b284e7b5b9
-transformers==4.46.2  # earlier version has a bug in computing rope embedding, https://github.com/huggingface/transformers/pull/32330
-# torchaudio==2.1.0
+transformers==4.49.0  # earlier version has a bug in computing rope embedding, https://github.com/huggingface/transformers/pull/32330
+sentence-transformers==3.4.1
 deepspeed==0.15.1
 fastavro==1.9.4
 # unstructured[pdf]==0.4.10  # needed for pdf extraction used in llama-recipes

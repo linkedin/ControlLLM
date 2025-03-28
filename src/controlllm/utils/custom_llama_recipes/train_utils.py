@@ -193,6 +193,10 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
 
                     device_batch = {}
                     for key, value in batch.items():
+                        # skip is value is not a tensor
+                        if not isinstance(value, torch.Tensor):
+                            continue
+
                         if train_config.enable_fsdp:
                             if is_xpu_available():
                                 device_batch[key] = value.to(torch.device(f"xpu:{local_rank}"))
@@ -301,7 +305,7 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
                     # evaluate the model every eval_steps using evaluation function
                     if train_config.run_validation and global_step % train_config.eval_steps == 0:
                         # eval_step_loss, eval_step_perplexity will be updated only when save_metrics is True as it is memory expensive
-                        _, eval_loss, _, _ = evaluate(model, train_config, eval_dataloader, local_rank, tokenizer, eval_step_loss, eval_step_perplexity, rank, val_loss, val_ppl, wandb_run, tb_writer, global_step)
+                        _, eval_loss, _, _, _, _ = evaluate(model, train_config, eval_dataloader, local_rank, tokenizer, eval_step_loss, eval_step_perplexity, rank, val_loss, val_ppl, wandb_run, tb_writer, global_step)
                         if eval_loss < best_val_loss:
                             best_val_loss = eval_loss
                             logging.info(f"--> best eval loss on step {global_step} is {best_val_loss}")
@@ -348,13 +352,24 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
         global_step = (epoch + 1) * len(train_dataloader)
         if train_config.run_validation and (epoch + 1) % train_config.eval_epoch == 0:
             # eval_step_loss, eval_step_perplexity will be updated only when save_metrics is True as it is memory expensive
-            eval_ppl, eval_epoch_loss, eval_bleu, eval_rougeLsum = evaluate(model, train_config, eval_dataloader, local_rank, tokenizer, eval_step_loss, eval_step_perplexity, rank, val_loss, val_ppl, wandb_run, tb_writer, global_step)
+            eval_ppl, eval_epoch_loss, eval_bleu, eval_rougeLsum, eval_avg_roc_auc, eval_avg_pr_auc = evaluate(model, train_config, eval_dataloader, local_rank, tokenizer, eval_step_loss, eval_step_perplexity, rank, val_loss, val_ppl, wandb_run, tb_writer, global_step)
 
             # if run_validation is True, save the model checkpoint if the validation loss is better than the best validation loss, this ensures that the best model is saved
             if train_config.save_model and eval_epoch_loss < best_val_loss:
                 logging.info(f"Epoch {epoch + 1}: Saving the model checkpoint because the validation loss {eval_epoch_loss} is better than the best validation loss {best_val_loss}")
                 save_checkpoint(model, optimizer, rank, train_config, fsdp_config, epoch, checkpoint_times, tokenizer=tokenizer, global_step=global_step)
-                save_eval_result(eval_ppl=eval_ppl, eval_loss=eval_epoch_loss, eval_bleu=eval_bleu, eval_rougeLsum=eval_rougeLsum, eval_step_loss=None, eval_step_perplexity=None, train_config=train_config, global_step=global_step, rank=rank)
+                results = {
+                    "eval_ppl": eval_ppl,
+                    "eval_loss": eval_loss,
+                    "eval_bleu": eval_bleu,
+                    "eval_rougeLsum": eval_rougeLsum,
+                    "eval_step_loss": eval_step_loss,
+                    "eval_step_perplexity": eval_step_perplexity,
+                    "eval_avg_roc_auc": eval_avg_roc_auc,
+                    "eval_avg_pr_auc": eval_avg_pr_auc,
+                    "global_step": global_step
+                }
+                save_eval_result(results, train_config, global_step, rank)
             elif train_config.save_model and eval_epoch_loss >= best_val_loss:
                 logging.info(f"Epoch {epoch + 1}: Validation loss {eval_epoch_loss} is not better than the best validation loss {eval_epoch_loss}, skipping the checkpoint saving")
             else:
@@ -364,12 +379,14 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
                 best_val_loss = eval_epoch_loss
                 logging.info(f"--> best eval loss on step {global_step} - epoch {epoch + 1} is {best_val_loss}")
 
-            logging.info(f"Epoch {epoch + 1}: eval_perplexity={eval_ppl:.4f}, eval_epoch_loss={eval_epoch_loss:.4f}, eval_bleu={eval_bleu:.4f}, eval_rougeLsum={eval_rougeLsum:.4f}, epoch time {epoch_end_time}s")
+            logging.info(f"Epoch {epoch + 1}: eval_perplexity={eval_ppl:.4f}, eval_epoch_loss={eval_epoch_loss:.4f}, eval_bleu={eval_bleu:.4f}, eval_rougeLsum={eval_rougeLsum:.4f}, eval_avg_roc_auc={eval_avg_roc_auc:.4f}, eval_avg_pr_auc={eval_avg_pr_auc:.4f}, epoch time {epoch_end_time}s")
             if tb_writer:
                 tb_writer.add_scalar("EvalLoss/Epoch", eval_epoch_loss, epoch + 1)
                 tb_writer.add_scalar("EvalPerplexity/Epoch", eval_ppl, epoch + 1)
                 tb_writer.add_scalar("EvalBleu/Epoch", eval_bleu, epoch + 1)
                 tb_writer.add_scalar("EvalRougeLsum/Epoch", eval_rougeLsum, epoch + 1)
+                tb_writer.add_scalar("EvalAvgRocAuc/Epoch", eval_avg_roc_auc, epoch + 1)
+                tb_writer.add_scalar("EvalAvgPrAuc/Epoch", eval_avg_pr_auc, epoch + 1)
 
             if wandb_run:
                 wandb_run.log({
@@ -378,6 +395,8 @@ def train(model, train_dataloader, eval_dataloader, tokenizer, optimizer, lr_sch
                     'eval/perplexity': eval_ppl,
                     'eval/bleu': eval_bleu,
                     'eval/rougeLsum': eval_rougeLsum,
+                    'eval/avg_roc_auc': eval_avg_roc_auc,
+                    'eval/avg_pr_auc': eval_avg_pr_auc,
                     'eval/epoch_time': epoch_end_time,
                 })
         elif train_config.save_model and (epoch + 1) % train_config.save_epoch == 0:  # save the checkpoint for every save_epoch
@@ -484,42 +503,6 @@ def check_frozen_layers_peft_model(model):
     for i, layer in enumerate(model.base_model.model.model.layers):
         for name, param in layer.named_parameters():
             logging.info(f"Layer {i}, parameter {name}: requires_grad = {param.requires_grad}")
-
-
-def setup():
-    """Initialize the process group for distributed training"""
-    if is_ccl_available():
-        # distributed training on xpus
-        dist.init_process_group("ccl")
-    else:
-        dist.init_process_group("nccl")
-
-
-def setup_environ_flags(rank):
-    """Set environment flags for debugging purposes"""
-    os.environ["TORCH_SHOW_CPP_STACKTRACES"] = str(1)
-    os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = str(1)
-    # os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
-    # This flag will help with CUDA memory fragmentations that can lead into OOM in some cases.
-    # Note this is only available in PyTorch Nighlies (as of July 30 2023)
-    # os.environ['PYTORCH_CUDA_ALLOC_CONF']='expandable_segments:True'
-    if rank == 0:
-        logging.info(f"--> Running with torch dist debug set to detail")
-
-
-def cleanup():
-    """Clean up the process group after training"""
-    dist.destroy_process_group()
-
-
-def clear_gpu_cache(rank=None):
-    """Clear the GPU cache for all ranks"""
-    if rank == 0:
-        logging.info(f"Clearing GPU cache for all ranks")
-    if is_xpu_available():
-        torch.xpu_empty_cache()
-    else:
-        torch.cuda.empty_cache()
 
 
 def get_parameter_dtypes(model):

@@ -11,10 +11,12 @@ import shutil
 from tqdm import tqdm
 from typing import List
 from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
+from sentence_transformers.util import is_sentence_transformer_model
+from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer, PretrainedConfig
 
-from controlllm.utils.custom_llama_recipes import load_sharded_model_single_gpu
 from controlllm.utils.model_expander import ModelExpander
+from controlllm.utils.custom_llama_recipes import load_sharded_model_single_gpu
+from controlllm.utils.custom_sentence_transformers import CustomSentenceTransformer as SentenceTransformer
 if "CHECKPOINT_PATH" not in os.environ:
     os.environ['CHECKPOINT_PATH'] = ""  # set the model path here, otherwise run with CHECKPOINT_PATH=<model checkpoint path> accelerate launch ./src/controlllm/inference/batch_eval.py
 
@@ -26,7 +28,7 @@ def parse_args():
     parser.add_argument("--fsdp_checkpoint_path", type=str, default="", help="Path to FSDP Sharded model checkpoints")
     parser.add_argument("--consolidated_model_path", type=str, default="", help="Path to save the HF converted model checkpoints")
     parser.add_argument("--merge_layers", action="store_true", default=False, help="Merge layers with concat operation")
-    parser.add_argument("--merge_back", action="store_true", default=True, help="Merge back the layers with split operation")  # action="store_true" sets the default value to False
+    parser.add_argument("--merge_back", action="store_true", default=False, help="Merge back the layers with split operation")  # action="store_true" sets the default value to False
     parser.add_argument("--merge_from", type=str, default="", help="Path to FSDP Sharded model checkpoints to merge from, if not provided, merge from the same model path")
     return parser.parse_args()
 
@@ -47,8 +49,15 @@ def load_model_from_config(fsdp_checkpoint_path):
     ModelExpander.register_expansion_classes(fsdp_checkpoint_path)
 
     model_config = AutoConfig.from_pretrained(fsdp_checkpoint_path, trust_remote_code=True)
-    # this does not load the model weights, weights are initialized randomly
-    model = AutoModelForCausalLM.from_config(model_config)
+
+    if is_sentence_transformer_model(model_config.trained_from):
+        # Note that _name_or_path in config.json is the path to the model pretrained model after expansion saved by ./utils/model_expander.py
+        config_dict, _ = PretrainedConfig.get_config_dict(fsdp_checkpoint_path)
+        # this loads the pretrained model from the expanded folder with expansion but without fine tuning
+        model = SentenceTransformer(model_name_or_path=config_dict["_name_or_path"])
+    else:
+        # this does not load the model weights, weights are initialized randomly
+        model = AutoModelForCausalLM.from_config(model_config)
     return model
 
 

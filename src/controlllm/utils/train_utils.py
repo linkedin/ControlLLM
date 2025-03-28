@@ -96,7 +96,7 @@ class CustomTrainerNative(Trainer):
                     if train_config.save_optimizer:
                         logging.info(" Saving the FSDP model checkpoints and optimizer using SHARDED_STATE_DICT")
                         logging.info("=====================================================")
-                        save_model_and_optimizer_sharded(model, rank, train_config, optim=optimizer, global_step=global_step)
+                        save_model_and_optimizer_sharded(model, rank, train_config, tokenizer=tokenizer, optim=optimizer, global_step=global_step)
                     else:
                         logging.info("Saving the FSDP model checkpoints using SHARDED_STATE_DICT")
                         logging.info("=====================================================")
@@ -112,7 +112,7 @@ class CustomTrainerNative(Trainer):
 
         def evaluate(model, train_config, eval_dataloader, local_rank, tokenizer, val_step_loss, val_step_perplexity, rank, val_loss, val_ppl, wandb_run, tb_writer, global_step):
             try:
-                eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, temp_val_loss, temp_step_perplexity = run_evaluation(model, train_config, eval_dataloader, local_rank, rank, tokenizer, wandb_run, tb_writer, global_step, initialize_metrics_modules(train_config, rank))
+                eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, temp_val_loss, temp_step_perplexity, eval_avg_roc_auc, eval_avg_pr_auc = run_evaluation(model, train_config, eval_dataloader, local_rank, rank, tokenizer, wandb_run, tb_writer, global_step, initialize_metrics_modules(train_config, rank))
             except Exception as e:
                 logging.exception(f"Error during evaluation at rank {rank}: {e}, continue training...")
                 # Clean up cache_dir to be able to recover from failures using rmtrees
@@ -120,7 +120,7 @@ class CustomTrainerNative(Trainer):
                 shutil.rmtree(cache_dir, ignore_errors=True)
                 torch.cuda.empty_cache()  # This can help release unoccupied memory back to the GPU
                 model.train()  # Make sure the model is in training mode
-                eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, temp_val_loss, temp_step_perplexity = float('inf'), float('inf'), float('inf'), float('inf'), [], []
+                eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, temp_val_loss, temp_step_perplexity, eval_avg_roc_auc, eval_avg_pr_auc = float('inf'), float('inf'), float('inf'), float('inf'), [], [], float('inf'), float('inf')
 
             dist.barrier()  # Ensure all processes are synchronized before returning for training, avoid NCCL timeout in resuming the training
             if train_config.save_metrics and train_config.debug:
@@ -128,7 +128,7 @@ class CustomTrainerNative(Trainer):
                 val_step_perplexity.extend(temp_step_perplexity)
             val_loss.append(float(eval_loss))
             val_ppl.append(float(eval_ppl))
-            return eval_ppl, eval_loss, eval_bleu, eval_rougeLsum
+            return eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, eval_avg_roc_auc, eval_avg_pr_auc
 
         try:
             dist.barrier()  # Ensure all processes are synchronized starting the forward/backward pass, avoid NCCL timeout when starting the training
@@ -282,7 +282,7 @@ class CustomTrainerTransformers(Trainer):
             return {}
 
         try:
-            eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, val_step_loss, val_step_perplexity = run_evaluation(
+            eval_ppl, eval_loss, eval_bleu, eval_rougeLsum, val_step_loss, val_step_perplexity, eval_avg_roc_auc, eval_avg_pr_auc = run_evaluation(
                 model=self.model, train_config=self.args, eval_dataloader=self.eval_dataloader,
                 local_rank=self.local_rank, rank=self.rank, tokenizer=self.tokenizer, wandb_run=self.wandb_run, tb_writer=self.tb_writer, global_step=self.state.global_step, metrics_modules=initialize_metrics_modules(self.train_config, self.rank))
         except Exception as e:
@@ -295,7 +295,8 @@ class CustomTrainerTransformers(Trainer):
         # convert the evaluation results to a dictionary
         metrics = {f"{metric_key_prefix}_ppl": eval_ppl, f"{metric_key_prefix}_loss": eval_loss,
                    f"{metric_key_prefix}_step_loss": val_step_loss, f"{metric_key_prefix}_step_perplexity": val_step_perplexity,
-                   f"{metric_key_prefix}_bleu": eval_bleu, f"{metric_key_prefix}_rougeLsum": eval_rougeLsum}
+                   f"{metric_key_prefix}_bleu": eval_bleu, f"{metric_key_prefix}_rougeLsum": eval_rougeLsum,
+                   f"{metric_key_prefix}_avg_roc_auc": eval_avg_roc_auc, f"{metric_key_prefix}_avg_pr_auc": eval_avg_pr_auc}
 
         # assign to self.metrics to let the save callback to save into checkpoint folder, no need to cumulate the metrics for all steps so overwrite it
         self.eval_metrics = {self.state.global_step: metrics}
@@ -323,4 +324,4 @@ def initialize_decay_steps(lr_scheduler, train_config, train_dataloader, gradien
         total_length = (len(train_dataloader) // gradient_accumulation_steps) + 1  # make sure total_length is at least 1
         total_steps = train_config.num_train_epochs * total_length
         lr_scheduler.decay_iterations = max(total_steps - train_config.warmup_steps, 1)  # make sure decay_iterations is at least 1
-        logging.info(f"Decay steps are initialized dynamically with {lr_scheduler.decay_iterations} = total_steps {total_steps}: epoches {train_config.num_train_epochs} * (per_device_data_len ({len(train_dataloader)} // gradient accumulation steps {gradient_accumulation_steps}) + 1) - warmup_steps {train_config.warmup_steps}")
+        logging.info(f"Decay steps are initialized dynamically with {lr_scheduler.decay_iterations} = total_steps {total_steps}: epoches {train_config.num_train_epochs} * ((per_device_data_len {len(train_dataloader)} // gradient accumulation steps {gradient_accumulation_steps}) + 1) - warmup_steps {train_config.warmup_steps}")

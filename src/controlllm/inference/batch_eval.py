@@ -22,17 +22,24 @@ if "MODEL_PATH" not in os.environ:
 
 import fire
 # make sure llm_eval_harness.eval is imported before datasets lib gets imported in other import because os.environ["HF_DATASETS_CACHE"] needs to be set before importing the datasets library
-from controlllm.inference.llm_eval_harness.eval import evaluate_model, parse_eval_args
+from controlllm.inference.llm_eval_harness.eval import evaluate_model as evaluate_model_harness, parse_eval_args
 
 # apply triton kernel customizations, it is particularly useful for llama 3 models as vocab size is 13k+
 from controlllm.utils.triton_kernels import apply_model_customizations
 apply_model_customizations()
 
+# apply monkey patching to load_dataset to set the default name to 'default', it is useful in a training env without internet access but with dataset cached already.
+from controlllm.utils import setup_utils
+setup_utils.apply_custom_load_dataset()
+
 import torch
 from dataclasses import asdict
 from transformers.trainer_utils import get_last_checkpoint
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from controlllm.utils import setup_utils
+
+from sentence_transformers.util import is_sentence_transformer_model
+from sentence_transformers.SentenceTransformer import SentenceTransformer
+
 from controlllm.utils.config_utils import Configs
 from controlllm.utils.model_expander import ModelExpander, ModelComparer
 from controlllm.utils.loading_utils import ModelLoader
@@ -40,7 +47,9 @@ from controlllm.utils.dataset_utils import DataLoaderWrapper
 from controlllm.utils.checkpoint_converter import load_model_from_config
 from controlllm.utils.custom_llama_recipes.model_checkpointing import load_sharded_model_single_gpu
 from controlllm.utils.custom_llama_recipes.eval_utils import evaluate
+
 from controlllm.inference.chat_completion import InferenceEngine
+from controlllm.inference.llm_eval_mteb.mteb import evaluate_model_mteb
 
 
 def main(**kwargs):
@@ -92,12 +101,15 @@ class EvaluationEngine(InferenceEngine):
         max_eval_step: int = -1,  # stop by max_eval_step for eval, set to 0 or negative to disable it
         eval_datasets: List[str] = None,  # The datasets to evaluate on, leave it to None to eval on trained_by datasets set in the model config, must be list of class names from .controlllm/configs/datasets.py, e.g. ['OpenMathInstruct2Dataset', 'OpenCoderSFTStage2']
         batching_strategy: str = "padding",  # padding or packing
+
         run_eval: bool = False,  # Whether to run evaluation on eval_datasets defined above, all above parameters are used for evaluation if this is True
         run_model_debug: bool = False,  # Whether to run model debug, only used when run_eval is True. Please ensure the data is small in size to avoid overwhelming TensorBoard. e.g. by setting max_eval_step to small number like 20 or make probe_data small when use_probe_data is True
         use_probe_data: bool = False,  # Whether to use probe data for model debug, only used when run_model_debug is True, probe_data: refer to it in controlllm/utils/custom_llama_recipes/eval_utils.py.
         output_attentions: bool = False,  # Whether to output attentions, used when run_model_debug is True to plot attentions
+
         run_leaderboard: bool = True,  # Whether to run benchmark on tasks defined below, all below parameters are used for benchmark if this is True
-        use_vllm: bool = True,  # Whether to use vllm to run benchmark, if False, use the default "hf"(huggingface transformers lib) to run benchmark. If True, run benchmark with single thread "python ~/controlllm/inference/batch_eval.py". If False, run it with multi-threading "accelerate launch ~/controlllm/inference/batch_eval.py"
+        # Configurations for benchmark with llm_eval_harness
+        use_vllm: bool = False,  # Whether to use vllm to run benchmark, if False, use the default "hf"(huggingface transformers lib) to run benchmark. If True, run benchmark with single thread "python ~/controlllm/inference/batch_eval.py". If False, run it with multi-threading "accelerate launch ~/controlllm/inference/batch_eval.py"
         apply_chat_template: bool = False,  # Whether to apply chat template to the chat history. Note that only instruct models require this. Some tasks(everything starting with meta) are already using chat template in the dataset, so set it to False for those tasks.
         fewshot_as_multiturn: bool = False,  # Whether to treat fewshot as multiturn, only used when apply_chat_template is True
         merge_layers: bool = False,  # Whether to merge the layers of the model, only used when use_vllm is True and model checkpoint is sharded
@@ -107,15 +119,21 @@ class EvaluationEngine(InferenceEngine):
         # tasks="code_pretrain_multishot,code_instruct_multishot,math_pretrain_mutlishot,math_instruct_multishot,zh_pretrain_multishot",  # This is the mutlishot benchmark tasks
         # tasks: str = "original_capability_instruct,math_instruct,code_instruct",  # this is to reproduce Control LLM reported result for math and coding
         # tasks: str = "meta_pretrain,zh_pretrain_multishot",  # this is to reproduce Control LLM reported result for Chinese
-        tasks: str = "original_capability_instruct,math_instruct,code_instruct,zh_instruct",  # The tasks to run benchmark on, set to None to use default in llm_eval_harness.eval->eval.py
+        # tasks: str = "original_capability_instruct,math_instruct,code_instruct,zh_instruct",  # The tasks to run benchmark on, set to None to use default in llm_eval_harness.eval->eval.py
         force_refresh: bool = False,  # Whether to force refresh benchmark results. If False, skip run_leaderboard when file_name = f"benchmark_results_{args.tasks.replace(',', '_')}.json" already exists in model_checkpoint_path
-        per_device_benchmark_batch_size: int = 8,  # The batch size for benchmark of open llm leaderboard, used when run_leaderboard is True. For "mmlu,ceval-valid,cmmlu", set it to 1
+        per_device_benchmark_batch_size: int = 64,  # The batch size for benchmark of open llm leaderboard, used when run_leaderboard is True. For "mmlu,ceval-valid,cmmlu", set it to 1
         max_model_len: int = 8192,  # The maximum model length for vLLM, only used when use_vllm is True. For "code_pretrain,code_instruct", use 10192. For rest, use 8192. If vLLM model init runs OOM, consider reducing it
         cpu_offload_gb: int = 0,  # The amount of memory to offload weights to CPU in GB, only used when use_vllm is True. When OOM, consider increasing it to 10.
         gpu_memory_utilization: float = 0.8,  # The amount of GPU memory to utilize, only used when use_vllm is True. For A100, set it to 0.8. For "mmlu,ceval-valid,cmmlu", set it to 0.6.
         enable_prefix_caching: bool = True,  # Whether to enable prefix caching, only used when use_vllm is True
         enable_benchmark_debug: bool = False,  # Whether to enable debug for benchmark with vLLM, only used when use_vllm is True. Only set to True for debugging purpose, run benchmark with False. Note that ray is used to run vLLM, to debug the code, need to set to only 1 GPU to disable ray worker.
         compare_weight: bool = False,  # Whether to compare the weights of the model with the original model to make sure the conversion is correct
+
+        # Configurations for benchmark with MTEB
+        # 15 most commonly used retrieval tasks in MTEB benchmarks
+        # tasks: str = "MSMARCO,NQ,HotpotQA,FiQA2018,SciFact,NFCorpus,ArguAna,DBPedia,SCIDOCS,Touche2020,TRECCOVID,QuoraRetrieval,FEVER,ClimateFEVER,CQADupstackRetrieval",  # The tasks to run benchmark on, set to None to use default in llm_eval_harness.eval->eval.py
+        tasks: str = "NFCorpus",  # set to "all" to run all tasks in MTEB, or comma separated task names to run specific tasks
+
         **kwargs  # Accepts any additional keyword arguments
     ):
         # Assign input parameters to class attributes
@@ -198,6 +216,8 @@ class EvaluationEngine(InferenceEngine):
 
         if self.run_eval and self.use_vllm:
             raise ValueError("vLLM is supported only for running benchmark, please set run_eval=False or use_vllm=False")
+        if self.trained_from and self.use_vllm and is_sentence_transformer_model(self.trained_from):
+            raise ValueError("vLLM is supported only for running benchmark for Casual LLM models, please set use_vllm=False")
 
         logging.info(f"Registering the expanded model classes with new model architecture from {self.model_checkpoint_path}")
         ModelExpander.register_expansion_classes(self.model_checkpoint_path, self.use_vllm)
@@ -335,6 +355,7 @@ class EvaluationEngine(InferenceEngine):
                 self.configs.model_loading_config.pretrained_model_name_or_path = self.trained_from
                 model_loader = ModelLoader(self.configs)
                 model = model_loader.model
+                self.enable_benchmark_debug = True  # this forces to run benchmark with single process without DDP as it is not supported to run DDP with FSDP loaded model for now. TODO: enable it
             else:
                 logging.info(f"Loading model from {self.model_checkpoint_path}")
                 model = load_model_from_config(self.model_checkpoint_path)
@@ -342,12 +363,12 @@ class EvaluationEngine(InferenceEngine):
                 model = model.to(device=self.configs.setup_config.device, dtype=self.torch_dtype)
                 model.config.use_cache = self.use_cache
 
-            results = evaluate_model(
-                args=args,
-                logger=logger,
-                loaded_model=model,
-                rank=self.configs.setup_config.rank,
-            )
+            if isinstance(model, SentenceTransformer):
+                # Compute MTEB benchmark metrics for sentence-transformer models
+                results = evaluate_model_mteb(model, self.model_checkpoint_path, self.tasks, self.per_device_benchmark_batch_size, self.configs, self.enable_benchmark_debug, self.force_refresh)
+            else:
+                # Compute LLM benchmark metrics for Casual LLM models
+                results = evaluate_model_harness(args=args, logger=logger, loaded_model=model, rank=self.configs.setup_config.rank)
         else:
             if self.use_vllm:
                 args.model = "vllm"
@@ -365,11 +386,14 @@ class EvaluationEngine(InferenceEngine):
             else:
                 args.model_args += f",{'' if args.apply_chat_template else 'add_bos_token=True'}"  # add_bos_token=True is required for models trained by this codebase.
 
-            results = evaluate_model(
-                args=args,
-                logger=logger,
-                rank=self.configs.setup_config.rank,
-            )
+            if is_sentence_transformer_model(self.model_checkpoint_path):
+                # Load the huggingface formated model converted by ./utils/checkpoint_converter.py
+                model = SentenceTransformer(self.model_checkpoint_path)
+                # Compute MTEB benchmark metrics for sentence-transformer models
+                results = evaluate_model_mteb(model, self.model_checkpoint_path, self.tasks, self.per_device_benchmark_batch_size, self.configs, self.enable_benchmark_debug, self.force_refresh)
+            else:
+                # Compute LLM benchmark metrics for Casual LLM models
+                results = evaluate_model_harness(args=args, logger=logger, rank=self.configs.setup_config.rank)
 
         if self.configs.setup_config.rank == 0:
             results = results["results"]

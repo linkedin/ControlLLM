@@ -7,6 +7,7 @@ import os
 import sys
 import logging
 import time
+import random
 import numpy as np
 from collections import defaultdict, deque
 import datetime
@@ -14,9 +15,8 @@ import dataclasses
 import torch
 import torch.distributed as dist
 from accelerate.utils import is_xpu_available
-
-from controlllm.utils.custom_llama_recipes import setup_environ_flags, clear_gpu_cache
 from controlllm.configs import TrainConfig
+from controlllm.configs.datasets import AbstractDataset as DatasetConfig
 
 
 class SmoothedValue(object):
@@ -163,6 +163,28 @@ class MetricLogger(object):
             header, total_time_str, total_time / len(iterable)))
 
 
+def setup_environ_flags(rank):
+    """Set environment flags for debugging purposes"""
+    os.environ["TORCH_SHOW_CPP_STACKTRACES"] = str(1)
+    os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = str(1)
+    # os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
+    # This flag will help with CUDA memory fragmentations that can lead into OOM in some cases.
+    # Note this is only available in PyTorch Nighlies (as of July 30 2023)
+    # os.environ['PYTORCH_CUDA_ALLOC_CONF']='expandable_segments:True'
+    if rank == 0:
+        logging.info(f"--> Running with torch dist debug set to detail")
+
+
+def clear_gpu_cache(rank=None):
+    """Clear the GPU cache for all ranks"""
+    if rank == 0:
+        logging.info(f"Clearing GPU cache for all ranks")
+    if is_xpu_available():
+        torch.xpu_empty_cache()
+    else:
+        torch.cuda.empty_cache()
+
+
 def setup_for_distributed(is_master):
     """
     This function disables printing and logging.info when not in the master process
@@ -194,6 +216,46 @@ def setup_for_distributed(is_master):
         root = logging.getLogger()
         for handler in root.handlers:
             handler.setLevel(level)
+
+
+def apply_custom_load_dataset():
+    """
+    This function applies monkey patching to load_dataset to set the default name to 'default' and cache_dir to the provided cache_dir.
+    It is to ensure load_dataset works in a training environment without internet access but with dataset cached already.
+    """
+    import datasets
+
+    # Save a reference to the original load_dataset function
+    original_load_dataset = datasets.load_dataset
+
+    # Define the custom load_dataset function
+    def custom_load_dataset(*args, **kwargs):
+        """
+        Custom wrapper for `load_dataset` that ensures:
+        - If no second positional argument is provided, `name` defaults to "default".
+        - If `cache_dir` is not explicitly provided in args or kwargs, it is injected from `os.environ['HF_HOME']`.
+
+        Args:
+            *args: Positional arguments for `load_dataset`
+            **kwargs: Keyword arguments for `load_dataset`
+
+        Returns:
+            Dataset or DatasetDict: The loaded dataset.
+        """
+
+        # Ensure 'name' is set to 'default' if not provided in args or kwargs
+        if len(args) < 2 and 'name' not in kwargs:
+            kwargs['name'] = 'default'
+
+        # Ensure 'cache_dir' is set if it's not already provided
+        # cache_dir is the 6th argument (index 5), so we check if args has >=6 elements
+        if len(args) < 6 and 'cache_dir' not in kwargs:
+            kwargs['cache_dir'] = DatasetConfig("AbstractDataset").hf_hub_dataset_cache_dir
+
+        return original_load_dataset(*args, **kwargs)
+
+    # Replace the original load_dataset function with the custom one
+    datasets.load_dataset = custom_load_dataset
 
 
 def is_dist_avail_and_initialized():
@@ -230,6 +292,7 @@ def init_distributed_mode(args):
     args.seed = args.random_seed + get_rank()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    random.seed(args.seed)
 
     # Check if CUDA is available, otherwise use CPU
     if args.device == '':

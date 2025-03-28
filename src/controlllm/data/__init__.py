@@ -13,6 +13,8 @@ from controlllm.data.magpie_dataset import get_dataset as get_magpie_dataset
 from controlllm.data.openhermes_dataset import get_dataset as get_openhermes_dataset
 from controlllm.data.synezh_dataset import get_dataset as get_synezh_dataset
 from controlllm.data.chatcompletion_dataset import get_dataset as get_chatcompletion_dataset
+from controlllm.data.semantic_search_dataset import get_dataset as get_semantic_search_dataset, get_data_collator as get_semantic_search_data_collator, postprocess_dataset as postprocess_semantic_search_dataset
+from controlllm.data.semantic_search_cosent_dataset import get_dataset as get_semantic_search_cosent_dataset, postprocess_dataset as postprocess_semantic_search_cosent_dataset
 
 
 # map the dataset to its preprocessor
@@ -38,10 +40,30 @@ DATASET_PREPROC = {
     "Magpie-Align/magpie-pro-mt-300_k-v0.1": get_magpie_dataset,
     "teknium/open_hermes-2.5": get_openhermes_dataset,
 
+    "MSMarcoDataset": partial(get_semantic_search_dataset),
+    "MSMarcoCosentDataset": partial(get_semantic_search_cosent_dataset),
     # add more dataset mapping here
+}
+
+
+# map the dataset to its postrocessor
+DATASET_POSTPROC = {
+    "MSMarcoDataset": partial(postprocess_semantic_search_dataset),
+    "MSMarcoCosentDataset": partial(postprocess_semantic_search_cosent_dataset),
+
+    # add more dataset postprocess mapping here
+}
+
+DATALOADER_COLLATE_FUNC = {
+    "MSMarcoDataset": get_semantic_search_data_collator,
+    "MSMarcoCosentDataset": get_semantic_search_data_collator,
+
+    # add more dataloader collate mapping here
 }
 
 
 __all__ = [
     "DATASET_PREPROC",
+    "DATALOADER_COLLATE_FUNC"
+    "sample_dataset"
 ]

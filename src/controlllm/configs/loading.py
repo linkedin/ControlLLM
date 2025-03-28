@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer
 from transformers.models.mixtral.modeling_mixtral import MixtralDecoderLayer
+from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer
 
 
 @dataclass
@@ -124,6 +125,8 @@ class ModelLoadingConfig:
             self.decoder_layer = [MistralDecoderLayer]
         elif "mixtral" in self.pretrained_model_name_or_path.lower():
             self.decoder_layer = [MixtralDecoderLayer]
+        elif "qwen" in self.pretrained_model_name_or_path.lower():
+            self.decoder_layer = [Qwen2DecoderLayer]
         else:
             raise ValueError("Model not supported")
 

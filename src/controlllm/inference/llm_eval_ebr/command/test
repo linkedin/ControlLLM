@@ -1,0 +1,31 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import json
+root = os.path.abspath(os.path.join(os.path.join(os.path.join(os.path.dirname(__file__), os.pardir), os.pardir), os.pardir))
+sys.path.append(root)
+
+from controlllm.inference.llm_eval_ebr.embedding_service.embedding import EmbeddingService
+from controlllm.inference.llm_eval_ebr.utils import NumpyEncoder
+
+"""
+Test it by ./test --documents '["this is a test", 'this is another test']'
+"""
+
+# get the arguments
+parser = argparse.ArgumentParser(prog='test_word_embeddings', description='get embeddings for list of words')
+parser.add_argument('--documents', '-d', dest='documents', metavar='documents', nargs="*", default='[]', type=str, help='The list of documents')
+args, _ = parser.parse_known_args()
+
+# call service via message queue
+service = EmbeddingService()
+if args.documents != '[]':
+    response = service.get_doc_embeddings(json.loads(args.documents))
+else:
+    print("Wrong parameter, you may use -s to get embeddings for documents")
+    exit()
+
+print(json.dumps(response, cls=NumpyEncoder, indent=2, ensure_ascii=False))
+print(len(response))

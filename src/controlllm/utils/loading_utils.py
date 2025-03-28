@@ -19,6 +19,9 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.trainer_pt_utils import get_model_param_count
 from peft import get_peft_model, prepare_model_for_kbit_training
 
+from sentence_transformers.util import is_sentence_transformer_model
+from controlllm.utils.custom_sentence_transformers import CustomSentenceTransformer as SentenceTransformer
+
 from controlllm.utils.config_utils import Configs
 from controlllm.utils.custom_llama_recipes import AnyPrecisionAdamW, freeze_transformer_layers
 from controlllm.utils.custom_llama_recipes import load_checkpoint, load_optimizer, is_load_checkpoint_needed
@@ -73,14 +76,14 @@ class ModelLoader:
                 overhead and currently requires latest torch version(2.2.0).
                 """
                 if self.configs.setup_config.local_rank == 0:
-                    self.model = AutoModelForCausalLM.from_pretrained(**asdict(self.configs.model_loading_config))
+                    self.model = self._from_pretrained(**asdict(self.configs.model_loading_config))
                 else:
                     auto_config = AutoConfig.from_pretrained(**asdict(self.configs.model_loading_config))
                     with torch.device("meta"):
                         self.model = AutoModelForCausalLM.from_config(auto_config)
                     with_meta = True
             else:
-                self.model = AutoModelForCausalLM.from_pretrained(**asdict(self.configs.model_loading_config))
+                self.model = self._from_pretrained(**asdict(self.configs.model_loading_config))
             # all ranks finished loading
             torch.distributed.barrier()
         else:
@@ -127,6 +130,18 @@ class ModelLoader:
             f"Model loaded from {self.configs.model_loading_config.pretrained_model_name_or_path}"
             f"{'. Resumed from ' + self.configs.train_config.resume_checkpoint_folder + '!' if self.resume_from_native_checkpoint or self.resume_from_transformers_checkpoint else ''}"
         )
+
+    def _from_pretrained(self, **kwargs):
+        # TODO: support fsdp_cpu_ram_efficient_loading for SentenceTransformer
+        if is_sentence_transformer_model(kwargs["pretrained_model_name_or_path"]):  # support local SentenceTransformer models only(download it first since no token passed for authentication of huggingface model hub)
+            pretrained_model_name_or_path = kwargs.pop("pretrained_model_name_or_path")
+            use_cache, output_attentions = kwargs.pop("use_cache"), kwargs.pop("output_attentions")  # remove the use_cache and output_attentions from kwargs because here we load the auto lm model not causal lm model
+            st_model = SentenceTransformer(model_name_or_path=pretrained_model_name_or_path, model_kwargs=kwargs)
+            # SentenceTransformer uses AutoModel.from_pretrained internally which does not support these attributes(difference from AutoModelForCausalLM.from_pretrained), so pop and set these attributes back
+            st_model.config.use_cache, st_model.config.output_attentions = use_cache, output_attentions
+            return st_model
+        else:
+            return AutoModelForCausalLM.from_pretrained(**kwargs)
 
     def _expand_model(self):
         #  "checkpoint-seed" folder in output_dir is a special folder to save the expanded model, don't create the folder if it doesn't exist yet

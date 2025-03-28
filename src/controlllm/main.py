@@ -1,3 +1,5 @@
+# this applies monkey patching to multiprocess module to fix the issue with terminating the pool, dataset.map can hang forever without this patch
+import controlllm.utils.multiprocess_custom
 import os
 # don't try to download datasets from internet, it takes too long to fail and fallback to cache
 os.environ['HF_DATASETS_OFFLINE'] = "1"
@@ -15,6 +17,7 @@ os.environ["NCCL_TIMEOUT"] = "36000"
 # uncomment the following two to print and debug the NCCL based Distribution Training issues
 # os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
 # os.environ["NCCL_DEBUG"] = "INFO"
+# os.environ["NCCL_DEBUG_SUBSYS"] = "ALL"
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ["WANDB_DISABLED"] = "true"  # disable wandb, only enable it when GPU cluster of training is set up with https access
 import fire
@@ -26,6 +29,8 @@ from controlllm.utils.triton_kernels import apply_model_customizations
 apply_model_customizations()
 
 from controlllm.utils import setup_utils
+setup_utils.apply_custom_load_dataset()
+
 from controlllm.utils.config_utils import Configs
 from controlllm.utils.loading_utils import ModelLoader
 from controlllm.utils.dataset_utils import DataLoaderWrapper
@@ -44,7 +49,7 @@ def main(**kwargs):
     model_loader = ModelLoader(configs)
 
     # Load and preprocess the datasets
-    data_loader = DataLoaderWrapper(configs, model_loader.tokenizer)
+    data_loader = DataLoaderWrapper(configs, model_loader.tokenizer, model_loader.model)
 
     # Start the training process
     if configs.train_config.trainer == "native":

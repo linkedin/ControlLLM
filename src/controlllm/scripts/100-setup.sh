@@ -34,6 +34,9 @@ pip install -r /home/jobuser/controlllm/requirements.txt
 # install lm-evaluation-harness
 pip3 install -e /home/jobuser/resources/lm-evaluation-harness
 
+# make datasets work
+pip uninstall -y pyarrow
+pip install pyarrow==17.0.0
 # make lm-evaluation-harness work
 pip uninstall -y antlr4-python3-runtime
 pip install antlr4-python3-runtime==4.11.1  # to make math hard eval work

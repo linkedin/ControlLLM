@@ -22,6 +22,9 @@ class AbstractDataset:
     run_validation: bool = False  # whether to run validation during training, suggest to disable it for pretraining dataset and enable it for SFT dataset
     include_val: bool = False  # include validation set in training, this makes sense in pretraining
     sample_size: Union[int, float] = 1.00  # sample size of the dataset used for training and evaluation(1.0 means full dataset, 0.1 means 10% of the dataset, 3000 means 3000 samples). Note that it also supports upsamping by setting it to a float number greater than 1.0 which int means absolute sample size (e.g. 2 means 2 samples, 2.0 means 2 times of the original dataset)
+    sample_before_preprocessing: bool = True  # sample the dataset before preprocessing, useful for large dataset, set to True for sampling after preprocessing
+    enable_post_process: bool = False  # postprocess can be defined in corresponding dataset class and register in ./src/controlllm/data/__init__.py. Post process is useful for adding new features depending on inference of loaded model in distributed manner
+    post_process_per_device_batch_size: int = 32  # batch size for post process
     test_split_ratio: float = -1  # split ratio for validation set. Only used when run_validation is False and train_split and test_split are the same. Recommendation - SFT: when train_split == test_split, set it to 0.2 or 0.1. Pretrain: set to -1 to use the full dataset for training and testing(don't worry, train_confg.max_eval_step will control the number of steps for evaluation)
 
     # tokenizing settings in data preprocessing
@@ -397,3 +400,61 @@ class OpenCoderSFTStage2(AbstractDataset):
     mixed_training: bool = False
     run_validation: bool = True
     test_split_ratio: float = 0.01  # 0.1% of the dataset for testing which is 445.9k * 0.01 = 4.459K
+
+
+@dataclass
+class MSMarcoDataset(AbstractDataset):
+
+    def default_response_columns():
+        return ["passages"]
+
+    def default_prompt_columns():
+        return ["query"]
+
+    dataset: str = "microsoft/ms_marco"
+    group_column: Optional[str] = "query_id"  # for Contrastive Learning, group by searchid to get positive and negative pairs
+    prompt_columns: Optional[List[str]] = field(default_factory=default_prompt_columns)  # for Contrastive Learning, this is the query
+    response_column: Optional[List[str]] = field(default_factory=default_response_columns)  # for Contrastive Learning, this is the document with different fields
+    relevance_column: Optional[str] = "passages"  # for Contrastive Learning, this is the relevance score, e.g. 0, 1, 2, 3, 4
+    include_val: bool = False  # there is no train/val split in this dataset yet
+    force_refresh: bool = False
+    # dataset in chat template format with role and content
+    train_split: str = "train"
+    test_split: str = "train"
+    pretrain: bool = False
+    mixed_training: bool = False
+    sample_size: Union[int, float] = 1.0 
+    sample_before_preprocessing: bool = False  # Sample it after preprocessing
+    K_doc: int = 3  # max number of permutations for document fields, this is to avoid overfitting to the specific field order. 0 means no permutation, -1 means all permutations.
+    K_pair: int = -1  # max number of permutations for positive and negative pairs from one group for contrastive learning. 0 means no permutation, -1 means all permutations.
+    run_validation: bool = True
+    test_split_ratio: float = 0.01  # not used since we have test split
+
+
+@dataclass
+class MSMarcoCosentDataset(AbstractDataset):
+
+    def default_response_columns():
+        return ["passages"]
+
+    def default_prompt_columns():
+        return ["query"]
+
+    dataset: str = "microsoft/ms_marco"
+    group_column: Optional[str] = "query_id"  # for Contrastive Learning, group by searchid to get positive and negative pairs
+    prompt_columns: Optional[List[str]] = field(default_factory=default_prompt_columns)  # for Contrastive Learning, this is the query
+    response_column: Optional[List[str]] = field(default_factory=default_response_columns)  # for Contrastive Learning, this is the document with different fields
+    relevance_column: Optional[str] = "passages"  # for Contrastive Learning, this is the relevance score, e.g. 0, 1, 2, 3, 4
+    include_val: bool = False  # there is no train/val split in this dataset yet
+    force_refresh: bool = False
+    # dataset in chat template format with role and content
+    train_split: str = "train"
+    test_split: str = "train"
+    pretrain: bool = False
+    mixed_training: bool = False
+    sample_size: Union[int, float] = 1.0 
+    sample_before_preprocessing: bool = False  # Sample it after preprocessing
+    K_doc: int = 3  # max number of permutations for document fields, this is to avoid overfitting to the specific field order. 0 means no permutation, -1 means all permutations.
+    K_pair: int = -1  # max number of permutations for positive and negative pairs from one group for contrastive learning. 0 means no permutation, -1 means all permutations.
+    run_validation: bool = True
+    test_split_ratio: float = 0.01  # not used since we have test split

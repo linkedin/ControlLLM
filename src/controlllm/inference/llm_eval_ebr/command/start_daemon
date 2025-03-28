@@ -1,0 +1,29 @@
+#!/usr/bin/env python
+
+import argparse
+import os
+import sys
+root = os.path.abspath(os.path.join(os.path.join(os.path.join(os.path.dirname(__file__), os.pardir), os.pardir), os.pardir))
+sys.path.append(root)
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+from controlllm.inference.llm_eval_ebr import configs
+from controlllm.inference.llm_eval_ebr.embedding_service.daemon import Daemon
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(prog='embedding', description='start embedding daemon')
+    parser.add_argument('--sent_model', choices=['sentence_transformers'], default=configs.SENTENCE_TRANSFORMERS, nargs='?',
+                        metavar='SENT_MODEL', type=str, help="the sentence embedding model to use (default configs.SENTENCE_TRANSFORMERS)")
+    parser.add_argument('--language', choices=['en'], default='en', nargs='?',
+                        metavar='LANGUAGE', type=str, help="the language of the model (default 'en')")
+
+    args, _ = parser.parse_known_args()
+
+    if args.sent_model == 'sentence_transformers':
+        os.environ['SENT_MODEL'] = configs.SENTENCE_TRANSFORMERS
+    else:
+        raise ValueError(f"Unsupported model type: {args.sent_model}")
+    sys.argv = [sys.argv[0]]
+    daemon = Daemon()
+    daemon.run()
