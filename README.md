@@ -26,7 +26,7 @@ We propose **Control LLM**, a novel approach that leverages parallel pre-trained
 
 - Preserves performance on existing tasks while integrating new knowledge.
 - Reduces catastrophic forgetting during continuous training and fine-tuning.
-- Enhances LLM performance across a variety of domains, including reasoning, coding, and multilingual tasks.
+- Enhances LLM performance across a variety of domains, including text generation: reasoning, coding, multilingual and text embedding: semantic matching tasks.
 
 #### Code and Models
 
@@ -75,7 +75,7 @@ This repository provides tools to fine-tune LLMs using Control LLM with both pre
   - Tools for probing the model with hidden state projection, attention map, interporation factor etc.
 
 - **Benchmarking Support**:
-  - Benchmarking capabilities for most open LLM benchmark tasks.
+  - Benchmarking capabilities for most open LLM and MTEB benchmark tasks.
 
 This codebase is designed for efficient and scalable fine-tuning of large language models, enabling researchers and developers to achieve high performance with minimal setup time.
 
