@@ -359,6 +359,7 @@ go to /home/jobuser/controlllm/configs/training.py, set either flop_counter to T
 
 #### Evaluate the model
 - lm-evaluation-harness is used to evaluate the model on openllm leaderboard tasks
+- mteb is used to evaluate the model on MTEB leaderboard tasks
 
 ```bash
 # single GPU:
