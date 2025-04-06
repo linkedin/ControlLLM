@@ -1,5 +1,17 @@
+import signal
 import datasets
 from typing import Dict, List
+
+from controlllm.utils import eval_logger
+
+try:
+    import sympy
+    from sympy.parsing.latex import parse_latex
+except ModuleNotFoundError:
+    raise ModuleNotFoundError(
+        "`sympy` is required for generating translation task prompt templates. \
+please install sympy via pip install lm-eval[math] or pip install -e .[math]",
+    )
 
 
 def doc_to_text(doc: dict) -> str:
@@ -7,8 +19,7 @@ def doc_to_text(doc: dict) -> str:
 
 
 def process_results(doc: dict, results: List[str]) -> Dict[str, int]:
-    candidates = results[0]
-    gold = doc["answer"]
+    answer = doc["answer"]
 
     if answer.strip() == (doc["answer"].strip() if isinstance(doc["answer"], str) else str(doc["answer"])) or is_equiv(answer, str(doc["answer"])):
         retval = 1
@@ -20,6 +31,64 @@ def process_results(doc: dict, results: List[str]) -> Dict[str, int]:
     }
     return results
 
+
+class timeout:
+    def __init__(self, seconds=1, error_message="Timeout"):
+        self.seconds = seconds
+        self.error_message = error_message
+
+    def handle_timeout(self, signum, frame):
+        raise TimeoutError(self.error_message)
+
+    def __enter__(self):
+        signal.signal(signal.SIGALRM, self.handle_timeout)
+        signal.alarm(self.seconds)
+
+    def __exit__(self, type, value, traceback):
+        signal.alarm(0)
+
+
+def is_equiv(x1: str, x2: str) -> bool:
+    """
+    x1 and x2 are normalized latex string
+    """
+    try:
+        with timeout(seconds=5):
+            try:
+                parsed_x1 = parse_latex(x1)
+                parsed_x2 = parse_latex(x2)
+            except (
+                sympy.parsing.latex.errors.LaTeXParsingError,
+                sympy.SympifyError,
+                TypeError,
+            ):
+                eval_logger.debug(f"couldn't parse one of {x1} or {x2}")
+                return False
+
+            try:
+                diff = parsed_x1 - parsed_x2
+            except TypeError:
+                eval_logger.debug(f"couldn't subtract {x1} and {x2}")
+                return False
+
+            try:
+                if sympy.simplify(diff) == 0:
+                    return True
+                else:
+                    return False
+            except ValueError:
+                eval_logger.debug(
+                    f"Had some trouble simplifying when comparing {x1} and {x2}"
+                )
+    except TimeoutError:
+        eval_logger.debug(f"Timed out comparing {x1} and {x2}")
+        return False
+    except ImportError as e:
+        eval_logger.error(e)
+        raise
+    except Exception as e:
+        eval_logger.debug(f"Failed comparing {x1} and {x2} with {e}")
+        return False
 
 def process_docs_cot_zh(dataset: datasets.Dataset, pretrain=False) -> datasets.Dataset:
     # follow example of https://huggingface.co/datasets/meta-llama/Llama-3.1-8B-Instruct-evals/viewer/Llama-3.1-8B-Instruct-evals__mmlu__0_shot__cot__details?row=0
