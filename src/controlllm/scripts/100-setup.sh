@@ -22,8 +22,15 @@ export PATH=$HOME/.local/bin:$PATH
 # nohup /home/jobuser/.local/lib/code-server-4.16.1-linux-amd64/bin/code-server --bind-addr 0.0.0.0:8080 --auth none &
 
 # install the needed python lib
-pip install vllm==0.6.1.post2+cu118  # vllm is installed separately to avoid conflicts with transformers
+pip install vllm==0.6.1.post2  # vllm is installed separately to avoid conflicts with transformers
 pip install -r /home/jobuser/controlllm/requirements.txt
+# mkdir -p /usr/local/include
+# sudo ln -s /usr/include/faiss /usr/local/include/faiss
+# use faiss-gpu==1.7.2 for GPU machine
+# faiss-gpu==1.7.2
+pip uninstall -y faiss-cpu
+pip install faiss-cpu==1.10.0
+# pip install flash-attn==2.6.3
 
 # install bitsandbytes
 # cd /home/jobuser/resources/bitsandbytes-0.42.0
@@ -54,4 +61,4 @@ pip install annotated-types==0.7.0
 pip uninstall -y triton
 pip install triton==3.0.0  # to make vllm work
 pip uninstall -y torchvision
-pip install torchvision==0.19.0+cu118  # to make vllm work
+pip install torchvision==0.19.0  # to make vllm work

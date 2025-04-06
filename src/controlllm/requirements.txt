@@ -1,4 +1,4 @@
-tensorflow==2.15.0.1
+tensorflow==2.16.1
 # protobuf==4.25.1
 scikit-learn==1.5.1
 joblib==1.4.2
@@ -25,7 +25,7 @@ interrogate
 # yapf
 matplotlib==3.7.2
 # mmpycocotools==12.0.3
-six==1.15.0
+six==1.16.0
 terminaltables
 protobuf==4.25.1
 # Note: for LLM
@@ -46,7 +46,7 @@ parameterized>=0.9.0
 pytest==7.4.3
 safetensors>=0.3.3
 scipy==1.11.3
-tensorboard==2.15.2
+tensorboard==2.16.2
 SentencePiece==0.2.0  # Needed for LlamaTokenizer in transformers
 # accelerate==0.26.1
 # bitsandbytes==0.41.2.post2
@@ -60,6 +60,8 @@ py7zr==0.20.5
 fire==0.4.0
 torch-tb-profiler==0.4.1
 ipywidgets==8.0.4
+fastavro==1.9.4
+fire==0.4.0
 ir_datasets==0.5.9
 datasets==2.21.0
 pyarrow==17.0.0
@@ -68,42 +70,41 @@ tqdm>=4.64.1
 pydantic-settings==2.5.2
 wandb==0.16.5
 optuna==3.6.0
-omegaconf==2.3.0
+omegaconf==2.4.0.dev3
 urllib3==2.2.1
 immutabledict==2.2.3  # lm-evaluation-harness needs this
 portalocker==3.1.1  # for ConditionalFileHandler to work in ./utils/__init__.py
 # for evaluation with ebr to work
 langchain==0.3.21
 langchain-community==0.3.19
-faiss-gpu==1.7.2
 redis==5.2.1
 Flask==3.1.0
 
 # triton kernels
 triton==3.0.0
-liger==0.0.147
+liger-kernel==0.5.6
 
 # important: latest image won't work with hdfs by default ray 2.4.0, it hangs forever, ray has to be >2.8.0!
-ray==2.11.0
+ray==2.31.0
 
 # for lm-evaluation-harness to work
-/home/jobuser/resources/tqdm_multiprocess-0.0.11-py3-none-any.whl
+tqdm_multiprocess==0.0.11
 # for datasets/metrics to work
-/home/jobuser/resources/sacrebleu-2.4.2-py3-none-any.whl
+sacrebleu==2.4.2
 nltk==3.7
 
 # important torch and flash-attn
-torchvision==0.19.0+cu118
 # torch==2.2.0 has a bug in FSDP init method of support HSDP with device_mesh: fix in newer version -> if sharding_strategy in HYBRID_SHARDING_STRATEGIES and device_mesh is None
-torch==2.4.0+cu118
+torch==2.4.0
+torchvision==0.19.0
 accelerate==0.34.2
 bitsandbytes==0.43.1
 # flash-attn==2.4.2 has a bug in zero++, fixed in 2.5.5
 # flash-attn==2.4.2
 # /home/jobuser/resources/flash_attn-2.5.5+cu118torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-flash-attn==2.6.3+cu118torch2.4cxx11abifalse
-vllm-flash-attn==2.6.1+cu118
-xformers==0.0.27.post2+cu118
+# flash-attn==2.6.3
+vllm-flash-attn==2.6.1
+xformers==0.0.27.post2
 # TODO: bump up version to >=4.46.1 for bug fix of gradient accumulation: https://github.com/huggingface/transformers/pull/34191/files#diff-977ff3d959128cb90b7c1b0461bbd614b2d2f242e56ce4bb3673f0b284e7b5b9
 transformers==4.49.0  # earlier version has a bug in computing rope embedding, https://github.com/huggingface/transformers/pull/32330
 sentence-transformers==3.4.1
